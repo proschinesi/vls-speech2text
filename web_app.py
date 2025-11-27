@@ -250,47 +250,49 @@ class VideoTranscriptionSession:
                                 except Exception as e:
                                     print(f"Errore scrittura SRT: {e}")
                                 
-                                # Riavvia FFmpeg ogni 2 sottotitoli per applicare i nuovi sottotitoli più rapidamente
+                                # Riavvia FFmpeg ogni sottotitolo per applicare i nuovi sottotitoli immediatamente
                                 # Questo è necessario perché FFmpeg non rilegge il file SRT quando viene aggiornato
-                                if self.subtitle_index % 2 == 0:
-                                    print(f"[Session {self.session_id}] Riavvio FFmpeg per applicare {len(self.all_subtitles)} sottotitoli")
-                                    try:
-                                        if self.ffmpeg_video_process:
-                                            self.ffmpeg_video_process.terminate()
-                                            try:
-                                                self.ffmpeg_video_process.wait(timeout=3)
-                                            except subprocess.TimeoutExpired:
-                                                self.ffmpeg_video_process.kill()
-                                                self.ffmpeg_video_process.wait()
-                                    except Exception as e:
-                                        print(f"Errore terminazione FFmpeg: {e}")
+                                # NOTA: Questo causa riscrittura del file MP4, ma è l'unico modo per vedere i sottotitoli
+                                print(f"[Session {self.session_id}] Riavvio FFmpeg per applicare {len(self.all_subtitles)} sottotitoli")
+                                try:
+                                    if self.ffmpeg_video_process:
+                                        self.ffmpeg_video_process.terminate()
+                                        try:
+                                            self.ffmpeg_video_process.wait(timeout=2)
+                                        except subprocess.TimeoutExpired:
+                                            self.ffmpeg_video_process.kill()
+                                            self.ffmpeg_video_process.wait()
+                                except Exception as e:
+                                    print(f"Errore terminazione FFmpeg: {e}")
+                                
+                                # Attendi che il processo sia completamente terminato
+                                time.sleep(0.5)
+                                
+                                # Riavvia FFmpeg con il file SRT aggiornato
+                                try:
+                                    # Forza flush del file SRT
+                                    os.sync()  # Sincronizza filesystem
                                     
-                                    # Attendi che il processo sia completamente terminato
-                                    time.sleep(1)
+                                    # Verifica che il file SRT sia stato scritto
+                                    if os.path.exists(self.srt_path) and os.path.getsize(self.srt_path) > 0:
+                                        srt_size = os.path.getsize(self.srt_path)
+                                        print(f"[Session {self.session_id}] File SRT verificato: {srt_size} bytes, {len(self.all_subtitles)} sottotitoli")
+                                    else:
+                                        print(f"[Session {self.session_id}] ATTENZIONE: File SRT vuoto o non trovato!")
                                     
-                                    # Riavvia FFmpeg con il file SRT aggiornato
-                                    # IMPORTANTE: Il file SRT deve essere completamente scritto prima di riavviare FFmpeg
-                                    try:
-                                        # Forza flush del file SRT
-                                        import os
-                                        os.sync()  # Sincronizza filesystem
-                                        
-                                        # Verifica che il file SRT sia stato scritto
-                                        if os.path.exists(self.srt_path) and os.path.getsize(self.srt_path) > 0:
-                                            print(f"[Session {self.session_id}] File SRT verificato: {os.path.getsize(self.srt_path)} bytes")
-                                        
-                                        self.ffmpeg_video_process = restart_ffmpeg_video_process(
-                                            self.video_url,
-                                            self.srt_path,
-                                            self.video_pipe_path,
-                                            use_http=False
-                                        )
-                                        print(f"[Session {self.session_id}] FFmpeg riavviato con SRT aggiornato ({len(self.all_subtitles)} sottotitoli)")
-                                        time.sleep(3)  # Attendi più tempo che FFmpeg inizi a scrivere
-                                    except Exception as e:
-                                        print(f"Errore riavvio FFmpeg: {e}")
-                                        import traceback
-                                        traceback.print_exc()
+                                    # Riavvia FFmpeg
+                                    self.ffmpeg_video_process = restart_ffmpeg_video_process(
+                                        self.video_url,
+                                        self.srt_path,
+                                        self.video_pipe_path,
+                                        use_http=False
+                                    )
+                                    print(f"[Session {self.session_id}] FFmpeg riavviato con SRT aggiornato")
+                                    time.sleep(2)  # Attendi che FFmpeg inizi a scrivere
+                                except Exception as e:
+                                    print(f"Errore riavvio FFmpeg: {e}")
+                                    import traceback
+                                    traceback.print_exc()
                                 
                                 self.subtitle_index += 1
                             
