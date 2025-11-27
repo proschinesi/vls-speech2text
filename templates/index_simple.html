@@ -39,6 +39,7 @@
             background: #5568d3;
         }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
 <body>
     <div class="container">
@@ -87,6 +88,50 @@
             const status = document.getElementById('status');
             const videoContainer = document.getElementById('videoContainer');
             const videoPlayer = document.getElementById('videoPlayer');
+            let hlsInstance = null;
+
+            function detachStream() {
+                if (hlsInstance) {
+                    hlsInstance.destroy();
+                    hlsInstance = null;
+                }
+                videoPlayer.removeAttribute('src');
+                videoPlayer.load();
+            }
+
+            function attachStream(url) {
+                console.log('Attach stream:', url);
+                if (window.Hls && window.Hls.isSupported()) {
+                    detachStream();
+                    hlsInstance = new Hls({
+                        enableWorker: true,
+                        lowLatencyMode: true
+                    });
+                    hlsInstance.loadSource(url);
+                    hlsInstance.attachMedia(videoPlayer);
+                    hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+                        videoPlayer.play().catch(err => {
+                            console.error('Errore play():', err);
+                            status.textContent = 'Clicca play manualmente se necessario.';
+                            status.style.background = '#fff3e0';
+                            status.style.color = '#e65100';
+                        });
+                    });
+                } else if (videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
+                    detachStream();
+                    videoPlayer.src = url;
+                    videoPlayer.play().catch(err => {
+                        console.error('Errore play():', err);
+                        status.textContent = 'Clicca play manualmente se necessario.';
+                        status.style.background = '#fff3e0';
+                        status.style.color = '#e65100';
+                    });
+                } else {
+                    status.textContent = 'Browser non supporta HLS. Usa un browser moderno.';
+                    status.style.background = '#ffebee';
+                    status.style.color = '#c62828';
+                }
+            }
             
             if (!form) {
                 console.error('Form non trovato!');
@@ -135,7 +180,6 @@
                         // Attendi un momento prima di impostare lo stream
                         setTimeout(() => {
                             console.log('Impostazione stream URL:', streamUrl);
-                            videoPlayer.src = streamUrl;
                             videoContainer.style.display = 'block';
                             
                             // Gestisci errori del video player
@@ -176,20 +220,13 @@
                             
                             videoPlayer.addEventListener('canplay', () => {
                                 console.log('Video: canplay - pronto per riproduzione');
-                                status.textContent = 'Video caricato, bufferizzazione...';
-                                status.style.background = '#fff3e0';
-                                status.style.color = '#e65100';
-                            });
-                            
-                            videoPlayer.addEventListener('canplaythrough', () => {
-                                console.log('Video: canplaythrough - buffer completo');
-                                status.textContent = 'Buffer completo, riproduzione in corso...';
+                                status.textContent = 'Video caricato, riproduzione in corso...';
                                 status.style.background = '#e8f5e9';
                                 status.style.color = '#2e7d32';
                             });
                             
                             videoPlayer.addEventListener('waiting', () => {
-                                console.log('Video: waiting - buffer in attesa');
+                                console.log('Video: waiting - bufferizzazione');
                                 status.textContent = 'Bufferizzazione in corso...';
                                 status.style.background = '#fff3e0';
                                 status.style.color = '#e65100';
@@ -200,49 +237,8 @@
                                 status.textContent = 'Stream in pausa, bufferizzazione...';
                             });
                             
-                            videoPlayer.addEventListener('progress', () => {
-                                if (videoPlayer.buffered.length > 0) {
-                                    const bufferedEnd = videoPlayer.buffered.end(videoPlayer.buffered.length - 1);
-                                    const duration = videoPlayer.duration;
-                                    if (duration > 0) {
-                                        const bufferedPercent = (bufferedEnd / duration * 100).toFixed(1);
-                                        console.log(`Buffer: ${bufferedPercent}%`);
-                                    }
-                                }
-                            });
-                            
-                            // Attendi buffer sufficiente prima di riprodurre
-                            const tryPlay = () => {
-                                if (videoPlayer.readyState >= 3) {
-                                    if (videoPlayer.buffered.length > 0) {
-                                        const bufferedEnd = videoPlayer.buffered.end(videoPlayer.buffered.length - 1);
-                                        if (bufferedEnd > 10) { // Almeno 10 secondi di buffer
-                                            videoPlayer.play().then(() => {
-                                                console.log('Video: play() riuscito');
-                                                status.textContent = 'Riproduzione avviata!';
-                                                status.style.background = '#e8f5e9';
-                                                status.style.color = '#2e7d32';
-                                            }).catch(err => {
-                                                console.error('Errore play():', err);
-                                                status.textContent = 'Clicca play manualmente se necessario.';
-                                                status.style.background = '#fff3e0';
-                                                status.style.color = '#e65100';
-                                            });
-                                        } else {
-                                            // Attendi più buffer
-                                            setTimeout(tryPlay, 1000);
-                                        }
-                                    } else {
-                                        setTimeout(tryPlay, 500);
-                                    }
-                                } else {
-                                    setTimeout(tryPlay, 500);
-                                }
-                            };
-                            
-                            // Inizia a provare dopo 8 secondi per permettere bufferizzazione
-                            setTimeout(tryPlay, 8000);
-                        }, 5000); // Attendi 5 secondi per permettere a FFmpeg di generare abbastanza dati
+                            attachStream(streamUrl);
+                        }, 2000);
                         
                         status.textContent = 'Avvio streaming...';
                         status.style.background = '#fff3e0';

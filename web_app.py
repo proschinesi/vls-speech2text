@@ -11,11 +11,10 @@ import tempfile
 import threading
 import time
 import json
-import socket
 from pathlib import Path
-from flask import Flask, render_template, request, jsonify, Response, stream_with_context
+import shutil
+from flask import Flask, render_template, request, jsonify, Response, stream_with_context, send_file
 from flask_cors import CORS
-import requests
 
 # Import fcntl solo su sistemi Unix (non Windows)
 try:
@@ -23,19 +22,6 @@ try:
     HAS_FCNTL = True
 except ImportError:
     HAS_FCNTL = False
-
-# Utility per trovare una porta libera
-def find_free_port(start_port=10000, max_port=20000):
-    """Trova una porta TCP libera."""
-    for port in range(start_port, max_port):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                s.bind(("127.0.0.1", port))
-                return port
-            except OSError:
-                continue
-    raise RuntimeError("Impossibile trovare una porta libera per lo streaming HTTP")
 
 # Aggiungi il percorso dello script principale
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -76,19 +62,13 @@ class VideoTranscriptionSession:
         
         # File temporanei
         self.srt_path = os.path.join(TEMP_DIR, f"subs_{session_id}.srt")
-        self.video_pipe_path = None  # usato solo per modalità file
+        self.video_pipe_path = None  # fallback
         
-        # Streaming HTTP (default)
-        self.use_http_stream = True
-        self.http_port = None
-        self.http_stream_url = None
-        self.http_headers = {
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Pragma': 'no-cache',
-            'Expires': '0',
-            'X-Accel-Buffering': 'no',
-            'Accept-Ranges': 'bytes'
-        }
+        # Streaming HLS
+        self.use_hls_stream = True
+        self.hls_dir = tempfile.mkdtemp(prefix=f"hls_{session_id}_")
+        self.hls_playlist = os.path.join(self.hls_dir, 'stream.m3u8')
+        self.stream_url = f"/api/hls/{session_id}/stream.m3u8"
         
         # Processi
         self.ffmpeg_video_process = None
@@ -117,13 +97,13 @@ class VideoTranscriptionSession:
     def _launch_ffmpeg_process(self):
         """Avvia o riavvia il processo FFmpeg per lo streaming video."""
         try:
-            target_output = None if self.use_http_stream else self.video_pipe_path
+            target_output = None if self.use_hls_stream else self.video_pipe_path
             self.ffmpeg_video_process = restart_ffmpeg_video_process(
                 self.video_url,
                 self.srt_path,
                 target_output,
-                use_http=self.use_http_stream,
-                http_port=self.http_port
+                use_http=False,
+                hls_output_dir=self.hls_dir if self.use_hls_stream else None
             )
         except Exception as e:
             self.status = "error"
@@ -141,10 +121,14 @@ class VideoTranscriptionSession:
             print(f"[Session {self.session_id}] Caricamento modello Whisper...")
             self.stt.load_model()
             
-            if self.use_http_stream:
-                self.http_port = find_free_port()
-                self.http_stream_url = f"http://127.0.0.1:{self.http_port}"
-                print(f"[Session {self.session_id}] Streaming HTTP su porta {self.http_port}")
+            if self.use_hls_stream:
+                # HLS directory già creata; pulisci eventuali file preesistenti
+                for f in os.listdir(self.hls_dir):
+                    try:
+                        os.unlink(os.path.join(self.hls_dir, f))
+                    except OSError:
+                        pass
+                print(f"[Session {self.session_id}] Streaming HLS in {self.hls_dir}")
             else:
                 import stat
                 try:
@@ -170,8 +154,8 @@ class VideoTranscriptionSession:
             # Avvia FFmpeg per processare video con sottotitoli
             print(f"[Session {self.session_id}] Avvio FFmpeg per video con sottotitoli...")
             print(f"[Session {self.session_id}] File SRT: {self.srt_path}")
-            if self.use_http_stream:
-                print(f"[Session {self.session_id}] HTTP stream: {self.http_stream_url}")
+            if self.use_hls_stream:
+                print(f"[Session {self.session_id}] Playlist HLS: {self.hls_playlist}")
             else:
                 print(f"[Session {self.session_id}] File output: {self.video_pipe_path}")
             
@@ -454,6 +438,12 @@ class VideoTranscriptionSession:
         except Exception as e:
             print(f"Errore rimozione pipe: {e}")
         
+        if self.hls_dir and os.path.exists(self.hls_dir):
+            try:
+                shutil.rmtree(self.hls_dir, ignore_errors=True)
+            except Exception as e:
+                print(f"Errore rimozione directory HLS: {e}")
+        
         # Assicurati che i processi siano None
         self.ffmpeg_video_process = None
         self.ffmpeg_audio_process = None
@@ -621,13 +611,11 @@ def start_transcription():
     thread = threading.Thread(target=start_in_thread, daemon=True)
     thread.start()
     
-    # L'URL dello stream sarà servito da Flask
-    stream_url = f'/api/stream/{session_id}'
-    
     return jsonify({
         'session_id': session_id,
         'video_url': video_url,
-        'stream_url': stream_url,
+        'stream_url': session.stream_url,
+        'stream_mode': 'hls',
         'status': 'starting'
     })
 
@@ -640,33 +628,14 @@ def stream_video(session_id):
     
     session = sessions[session_id]
     
-    if session.use_http_stream:
-        def generate_http():
-            reconnect_delay = 0.5
-            while session.running:
-                if not session.http_stream_url:
-                    time.sleep(0.2)
-                    continue
-                try:
-                    with requests.get(session.http_stream_url, stream=True, timeout=5) as resp:
-                        resp.raise_for_status()
-                        for chunk in resp.iter_content(chunk_size=1024 * 64):
-                            if not session.running:
-                                break
-                            if chunk:
-                                yield chunk
-                    if not session.running:
-                        break
-                    time.sleep(reconnect_delay)
-                except requests.RequestException as e:
-                    print(f"[Session {session_id}] Errore stream HTTP: {e}")
-                    if not session.running:
-                        break
-                    time.sleep(1)
-        return Response(
-            stream_with_context(generate_http()),
-            mimetype='video/mp4',
-            headers=session.http_headers
+    if session.use_hls_stream:
+        playlist_path = os.path.join(session.hls_dir, 'stream.m3u8')
+        if not os.path.exists(playlist_path):
+            return "Playlist non disponibile", 404
+        return send_file(
+            playlist_path,
+            mimetype='application/vnd.apple.mpegurl',
+            conditional=True
         )
     
     if not session.video_pipe_path or not os.path.exists(session.video_pipe_path):
@@ -790,6 +759,31 @@ def stream_video(session_id):
             'Accept-Ranges': 'bytes'
         }
     )
+
+
+@app.route('/api/hls/<session_id>/<path:filename>')
+def serve_hls_file(session_id, filename):
+    """Serve playlist e segmenti HLS generati per una sessione."""
+    if session_id not in sessions:
+        return "Sessione non trovata", 404
+    
+    session = sessions[session_id]
+    if not session.use_hls_stream:
+        return "Sessione non configurata per HLS", 400
+    
+    base_dir = session.hls_dir
+    requested_path = os.path.abspath(os.path.join(base_dir, filename))
+    if not requested_path.startswith(os.path.abspath(base_dir)):
+        return "Percorso non valido", 400
+    
+    if not os.path.exists(requested_path):
+        return "File non trovato", 404
+    
+    mimetype = 'video/mp2t'
+    if filename.endswith('.m3u8'):
+        mimetype = 'application/vnd.apple.mpegurl'
+    
+    return send_file(requested_path, mimetype=mimetype, conditional=True)
 
 
 @app.route('/api/status/<session_id>')

@@ -247,7 +247,14 @@ def update_vlc_subtitles(vlc_port=8080, srt_path=None):
         return False
 
 
-def restart_ffmpeg_video_process(input_source, srt_path, output_path=None, use_http=False, http_port=8090):
+def restart_ffmpeg_video_process(
+    input_source,
+    srt_path,
+    output_path=None,
+    use_http=False,
+    http_port=8090,
+    hls_output_dir=None
+):
     """
     Riavvia FFmpeg per processare video con sottotitoli burn-in aggiornati.
     
@@ -262,13 +269,11 @@ def restart_ffmpeg_video_process(input_source, srt_path, output_path=None, use_h
     # Su macOS, potrebbe essere necessario usare percorsi assoluti
     abs_srt_path = os.path.abspath(srt_path)
     
-    # Escape caratteri speciali nel percorso SRT per il filtro
-    # Sostituisci apostrofi e altri caratteri problematici
-    escaped_srt_path = abs_srt_path.replace("'", "\\'").replace(":", "\\:")
+    use_hls = hls_output_dir is not None
     
     # Determina formato output in base al percorso
-    # Se è una pipe o file .ts, usa MPEG-TS, altrimenti MP4
-    use_mp4 = use_http
+    # Se è una pipe o file .ts, usa MPEG-TS, altrimenti MP4/HLS
+    use_mp4 = use_http or use_hls
     if output_path and not output_path.endswith('.ts'):
         use_mp4 = True
     
@@ -310,7 +315,19 @@ def restart_ffmpeg_video_process(input_source, srt_path, output_path=None, use_h
         "-ar", "44100",  # Sample rate standard
     ]
     
-    if use_mp4:
+    if use_hls:
+        os.makedirs(hls_output_dir, exist_ok=True)
+        playlist_path = os.path.join(hls_output_dir, "stream.m3u8")
+        segment_pattern = os.path.join(hls_output_dir, "segment_%05d.ts")
+        ffmpeg_cmd.extend([
+            "-f", "hls",
+            "-hls_time", "4",
+            "-hls_list_size", "10",
+            "-hls_flags", "delete_segments+append_list+independent_segments",
+            "-hls_segment_filename", segment_pattern,
+            playlist_path
+        ])
+    elif use_mp4:
         # MP4 fragmented per streaming - metadati all'inizio
         ffmpeg_cmd.extend([
             "-f", "mp4",
