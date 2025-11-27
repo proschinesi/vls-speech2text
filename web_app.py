@@ -125,6 +125,14 @@ class VideoTranscriptionSession:
             
             # Avvia FFmpeg per processare video con sottotitoli
             print(f"[Session {self.session_id}] Avvio FFmpeg per video con sottotitoli...")
+            print(f"[Session {self.session_id}] File SRT: {self.srt_path}")
+            print(f"[Session {self.session_id}] File output: {self.video_pipe_path}")
+            
+            # Verifica che il file SRT esista prima di avviare FFmpeg
+            if not os.path.exists(self.srt_path):
+                print(f"[Session {self.session_id}] ERRORE: File SRT non trovato, creazione...")
+                self._init_srt_file()
+            
             self.ffmpeg_video_process = restart_ffmpeg_video_process(
                 self.video_url,
                 self.srt_path,
@@ -132,9 +140,14 @@ class VideoTranscriptionSession:
                 use_http=False
             )
             
-            time.sleep(2)
+            # Attendi che FFmpeg inizi a scrivere
+            time.sleep(3)
             
-            time.sleep(2)
+            # Verifica che FFmpeg sia ancora in esecuzione
+            if self.ffmpeg_video_process.poll() is not None:
+                print(f"[Session {self.session_id}] ERRORE: FFmpeg terminato prematuramente!")
+                stderr_output = self.ffmpeg_video_process.stderr.read().decode() if self.ffmpeg_video_process.stderr else "N/A"
+                print(f"FFmpeg stderr: {stderr_output[:500]}")
             
             # Avvia thread per processare audio
             self.running = True
@@ -237,9 +250,9 @@ class VideoTranscriptionSession:
                                 except Exception as e:
                                     print(f"Errore scrittura SRT: {e}")
                                 
-                                # Riavvia FFmpeg ogni 3 sottotitoli per applicare i nuovi sottotitoli
+                                # Riavvia FFmpeg ogni 2 sottotitoli per applicare i nuovi sottotitoli più rapidamente
                                 # Questo è necessario perché FFmpeg non rilegge il file SRT quando viene aggiornato
-                                if self.subtitle_index % 3 == 0:
+                                if self.subtitle_index % 2 == 0:
                                     print(f"[Session {self.session_id}] Riavvio FFmpeg per applicare {len(self.all_subtitles)} sottotitoli")
                                     try:
                                         if self.ffmpeg_video_process:
