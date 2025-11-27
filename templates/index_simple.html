@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trascrizione Video con Sottotitoli</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #667eea;
+            color: white;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            color: #333;
+            padding: 30px;
+            border-radius: 10px;
+        }
+        h1 {
+            color: #667eea;
+        }
+        input, select, button {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            font-size: 16px;
+        }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        button:hover {
+            background: #5568d3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎬 Trascrizione Video con Sottotitoli</h1>
+        <p>Inserisci l'URL del video e riproducilo con sottotitoli burn-in in tempo reale</p>
+        
+        <form id="videoForm">
+            <label for="videoUrl">URL Video o Percorso File</label>
+            <input type="text" id="videoUrl" name="videoUrl" 
+                   placeholder="https://example.com/video.mp4" required>
+            
+            <label for="language">Lingua</label>
+            <select id="language" name="language">
+                <option value="auto">Rilevamento automatico</option>
+                <option value="en" selected>Inglese</option>
+                <option value="it">Italiano</option>
+            </select>
+            
+            <label for="modelSize">Modello Whisper</label>
+            <select id="modelSize" name="modelSize">
+                <option value="tiny">Tiny (veloce)</option>
+                <option value="base" selected>Base (bilanciato)</option>
+                <option value="small">Small (accurato)</option>
+            </select>
+            
+            <button type="submit">▶️ Riproduci con Sottotitoli</button>
+        </form>
+        
+        <div id="status" style="margin-top: 20px; padding: 10px; display: none;"></div>
+        <div id="videoContainer" style="margin-top: 20px; display: none;">
+            <video id="videoPlayer" controls style="width: 100%;"></video>
+        </div>
+    </div>
+    
+    <script>
+        console.log('Script caricato');
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM caricato');
+            
+            const form = document.getElementById('videoForm');
+            const videoUrl = document.getElementById('videoUrl');
+            const status = document.getElementById('status');
+            const videoContainer = document.getElementById('videoContainer');
+            const videoPlayer = document.getElementById('videoPlayer');
+            
+            if (!form) {
+                console.error('Form non trovato!');
+                return;
+            }
+            
+            form.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                console.log('Form inviato');
+                
+                const url = videoUrl.value.trim();
+                if (!url) {
+                    status.textContent = 'Inserisci un URL video';
+                    status.style.display = 'block';
+                    status.style.background = '#ffebee';
+                    status.style.color = '#c62828';
+                    return;
+                }
+                
+                status.textContent = 'Avvio trascrizione...';
+                status.style.display = 'block';
+                status.style.background = '#fff3e0';
+                status.style.color = '#e65100';
+                
+                try {
+                    const response = await fetch('/api/start', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            video_url: url,
+                            language: document.getElementById('language').value,
+                            model_size: document.getElementById('modelSize').value,
+                            chunk_duration: 10
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    console.log('Risposta:', data);
+                    
+                    if (response.ok) {
+                        videoPlayer.src = window.location.origin + data.stream_url;
+                        videoContainer.style.display = 'block';
+                        status.textContent = 'Trascrizione in corso...';
+                        status.style.background = '#e8f5e9';
+                        status.style.color = '#2e7d32';
+                    } else {
+                        status.textContent = 'Errore: ' + (data.error || 'Errore sconosciuto');
+                        status.style.background = '#ffebee';
+                        status.style.color = '#c62828';
+                    }
+                } catch (error) {
+                    console.error('Errore:', error);
+                    status.textContent = 'Errore di connessione: ' + error.message;
+                    status.style.background = '#ffebee';
+                    status.style.color = '#c62828';
+                }
+            });
+        });
+    </script>
+</body>
+</html>
+

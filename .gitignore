@@ -1,0 +1,30 @@
+# Ambiente virtuale Python
+venv/
+env/
+ENV/
+
+# File temporanei audio
+*.wav.tmp
+*.mp3.tmp
+*.flac.tmp
+
+# Cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Modelli Whisper scaricati (opzionale, rimuovi se vuoi includerli)
+.whisper/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
