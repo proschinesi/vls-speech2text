@@ -565,9 +565,12 @@ def start_session():
     """Avvia una nuova sessione."""
     global session_counter
     
+    # Su Railway/cloud, FFmpeg Whisper potrebbe non essere disponibile
+    # In futuro potremmo aggiungere fallback a Python Whisper qui
     if not HAS_WHISPER_FILTER:
         return jsonify({
-            'error': 'Filtro Whisper non disponibile. Installa FFmpeg 8.0+ con --enable-whisper'
+            'error': 'Filtro Whisper FFmpeg non disponibile. Su Railway usa web_app.py che supporta Python Whisper.',
+            'suggestion': 'Usa web_app.py invece di web_app_simple.py per supporto Python Whisper'
         }), 400
     
     data = request.json
