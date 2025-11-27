@@ -16,7 +16,11 @@ from flask_cors import CORS
 
 # Cerca FFmpeg compilato con Whisper
 FFMPEG_PATH = None
-FFMPEG_BUILD_DIR = "/Users/ube/ffmpeg_build/ffmpeg"
+# Supporta sia macOS che Linux
+if os.path.exists("/Users/ube/ffmpeg_build/ffmpeg"):
+    FFMPEG_BUILD_DIR = "/Users/ube/ffmpeg_build/ffmpeg"  # macOS
+else:
+    FFMPEG_BUILD_DIR = "/opt/ffmpeg_build/ffmpeg"  # Linux
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 FFMPEG_WRAPPER = os.path.join(SCRIPT_DIR, "ffmpeg_whisper_wrapper.sh")
 
