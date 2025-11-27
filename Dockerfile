@@ -87,6 +87,11 @@ RUN mkdir -p /root/.cache/whisper
 # Esponi porta (Railway userà PORT da environment)
 EXPOSE 8080
 
+# Crea script di avvio che gestisce PORT
+RUN echo '#!/bin/bash' > /app/start.sh && \
+    echo 'exec python3 web_app_simple.py --host 0.0.0.0 --port ${PORT:-8080}' >> /app/start.sh && \
+    chmod +x /app/start.sh
+
 # Avvia applicazione
-CMD ["python3", "web_app_simple.py", "--host", "0.0.0.0", "--port", "${PORT:-8080}"]
+CMD ["/bin/bash", "/app/start.sh"]
 
