@@ -266,6 +266,12 @@ def restart_ffmpeg_video_process(input_source, srt_path, output_path=None, use_h
     # Sostituisci apostrofi e altri caratteri problematici
     escaped_srt_path = abs_srt_path.replace("'", "\\'").replace(":", "\\:")
     
+    # Determina formato output in base al percorso
+    # Se è una pipe o file .ts, usa MPEG-TS, altrimenti MP4
+    use_mp4 = False
+    if output_path and not output_path.endswith('.ts'):
+        use_mp4 = True
+    
     ffmpeg_cmd = [
         "ffmpeg",
         "-i", input_source,
@@ -273,9 +279,14 @@ def restart_ffmpeg_video_process(input_source, srt_path, output_path=None, use_h
         "-c:v", "libx264",
         "-preset", "ultrafast",
         "-tune", "zerolatency",
-        "-c:a", "copy",
-        "-f", "mpegts",
+        "-c:a", "aac",  # AAC è più compatibile di copy per MP4
+        "-movflags", "frag_keyframe+empty_moov",  # Per streaming MP4
     ]
+    
+    if use_mp4:
+        ffmpeg_cmd.extend(["-f", "mp4"])
+    else:
+        ffmpeg_cmd.extend(["-f", "mpegts"])
     
     if use_http:
         # HTTP streaming - FFmpeg come server HTTP
@@ -290,11 +301,23 @@ def restart_ffmpeg_video_process(input_source, srt_path, output_path=None, use_h
         # Output su stdout (per pipe diretta)
         ffmpeg_cmd.append("-")
     
-    return subprocess.Popen(
-        ffmpeg_cmd,
-        stdout=subprocess.PIPE if not output_path and not use_http else subprocess.DEVNULL,
-        stderr=subprocess.PIPE
-    )
+    # Configura process creation per evitare semafori leaked
+    import multiprocessing
+    # Usa spawn invece di fork su macOS per evitare problemi con semafori
+    if sys.platform == 'darwin':
+        # Su macOS, usa start_new_session per isolare il processo
+        return subprocess.Popen(
+            ffmpeg_cmd,
+            stdout=subprocess.PIPE if not output_path and not use_http else subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            start_new_session=True  # Crea nuova sessione per isolare il processo
+        )
+    else:
+        return subprocess.Popen(
+            ffmpeg_cmd,
+            stdout=subprocess.PIPE if not output_path and not use_http else subprocess.DEVNULL,
+            stderr=subprocess.PIPE
+        )
 
 
 def launch_vlc_with_subtitles(input_source, model_size="base", language="it", 

@@ -106,21 +106,24 @@ class VideoTranscriptionSession:
                 
                 # Su macOS, le named pipe potrebbero avere problemi, usa un file temporaneo come fallback
                 if sys.platform == 'darwin':
-                    # Su macOS, prova prima con una pipe, ma prepara un fallback
+                # Su macOS, usa sempre file MP4 invece di pipe (più compatibile con browser)
+                if sys.platform == 'darwin':
+                    # Usa MP4 per migliore compatibilità browser
+                    self.video_pipe_path = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False).name
+                    print(f"[Session {self.session_id}] Usando file MP4: {self.video_pipe_path}")
+                else:
+                    # Linux: prova con named pipe
                     try:
                         os.mkfifo(self.video_pipe_path, stat.S_IRUSR | stat.S_IWUSR)
                         print(f"[Session {self.session_id}] Named pipe creata: {self.video_pipe_path}")
                     except Exception as e:
-                        print(f"[Session {self.session_id}] Errore creazione pipe, uso file temporaneo: {e}")
-                        self.video_pipe_path = tempfile.NamedTemporaryFile(suffix='.ts', delete=False).name
-                else:
-                    # Linux: usa named pipe
-                    os.mkfifo(self.video_pipe_path, stat.S_IRUSR | stat.S_IWUSR)
-                    print(f"[Session {self.session_id}] Named pipe creata: {self.video_pipe_path}")
+                        print(f"[Session {self.session_id}] Errore creazione pipe, uso file MP4: {e}")
+                        self.video_pipe_path = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False).name
+                        print(f"[Session {self.session_id}] Usando file MP4: {self.video_pipe_path}")
             except Exception as e:
                 print(f"Errore creazione pipe: {e}")
-                self.video_pipe_path = tempfile.NamedTemporaryFile(suffix='.ts', delete=False).name
-                print(f"[Session {self.session_id}] Usando file temporaneo: {self.video_pipe_path}")
+                self.video_pipe_path = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False).name
+                print(f"[Session {self.session_id}] Usando file MP4: {self.video_pipe_path}")
             
             # Avvia FFmpeg per processare video con sottotitoli
             print(f"[Session {self.session_id}] Avvio FFmpeg per video con sottotitoli...")
@@ -173,11 +176,20 @@ class VideoTranscriptionSession:
         ]
         
         try:
-            self.ffmpeg_audio_process = subprocess.Popen(
-                ffmpeg_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
+            # Su macOS, usa start_new_session per isolare il processo
+            if sys.platform == 'darwin':
+                self.ffmpeg_audio_process = subprocess.Popen(
+                    ffmpeg_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    start_new_session=True
+                )
+            else:
+                self.ffmpeg_audio_process = subprocess.Popen(
+                    ffmpeg_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
             
             while self.running and (self.ffmpeg_audio_process.poll() is None or 
                                    self.ffmpeg_video_process.poll() is None):
@@ -577,20 +589,22 @@ def stream_video(session_id):
                 print(f"Errore: pipe non creata dopo {max_wait} secondi")
                 return
             
-            # Apri la pipe
+            # Apri la pipe/file
+            # Se è un file MP4, leggi in modo normale
+            # Se è una pipe, usa non-blocking
+            is_pipe = os.path.isfifo(session.video_pipe_path) if hasattr(os.path, 'isfifo') else False
+            
             try:
                 f = open(session.video_pipe_path, 'rb')
-                # Su sistemi Unix, imposta il file descriptor come non-bloccante se possibile
-                if HAS_FCNTL and hasattr(fcntl, 'F_SETFL'):
+                # Solo per pipe, imposta non-blocking
+                if is_pipe and HAS_FCNTL and hasattr(fcntl, 'F_SETFL'):
                     try:
                         flags = fcntl.fcntl(f.fileno(), fcntl.F_GETFL)
                         fcntl.fcntl(f.fileno(), fcntl.F_SETFL, flags | os.O_NONBLOCK)
                     except (OSError, AttributeError):
-                        # Se non funziona, continua in modalità bloccante
                         pass
             except Exception as e:
-                print(f"Errore apertura pipe: {e}")
-                # Fallback: riprova in modalità bloccante
+                print(f"Errore apertura file/pipe: {e}")
                 f = open(session.video_pipe_path, 'rb')
             
             empty_reads = 0
@@ -622,15 +636,24 @@ def stream_video(session_id):
             import traceback
             traceback.print_exc()
     
+    # Determina MIME type in base al formato file
+    if session.video_pipe_path.endswith('.mp4'):
+        mimetype = 'video/mp4'
+        content_type = 'video/mp4'
+    else:
+        mimetype = 'video/mp2t'
+        content_type = 'video/mp2t'
+    
     return Response(
         stream_with_context(generate()),
-        mimetype='video/mp2t',
+        mimetype=mimetype,
         headers={
-            'Content-Type': 'video/mp2t',
+            'Content-Type': content_type,
             'Cache-Control': 'no-cache, no-store, must-revalidate',
             'Pragma': 'no-cache',
             'Expires': '0',
-            'X-Accel-Buffering': 'no'
+            'X-Accel-Buffering': 'no',
+            'Accept-Ranges': 'bytes'
         }
     )
 
@@ -671,10 +694,29 @@ def cleanup_session(session_id):
         return jsonify({'error': 'Sessione non trovata'}), 404
     
     session = sessions[session_id]
-    session.cleanup()
-    del sessions[session_id]
+    try:
+        session.cleanup()
+    except Exception as e:
+        print(f"Errore cleanup sessione {session_id}: {e}")
+    finally:
+        if session_id in sessions:
+            del sessions[session_id]
     
     return jsonify({'status': 'cleaned'})
+
+@app.route('/api/cleanup/all', methods=['POST'])
+def cleanup_all_sessions():
+    """Pulisce tutte le sessioni attive."""
+    global sessions
+    cleaned = 0
+    for session_id, session in list(sessions.items()):
+        try:
+            session.cleanup()
+            cleaned += 1
+        except Exception as e:
+            print(f"Errore cleanup sessione {session_id}: {e}")
+    sessions.clear()
+    return jsonify({'status': 'cleaned', 'sessions_cleaned': cleaned})
 
 
 def cleanup_all_sessions():
