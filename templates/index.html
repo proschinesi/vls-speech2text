@@ -301,15 +301,39 @@
                     detachStream();
                     hlsInstance = new Hls({
                         enableWorker: true,
-                        lowLatencyMode: true
+                        lowLatencyMode: true,
+                        liveSyncDurationCount: 3,  // Segui gli ultimi 3 segmenti per playlist live
+                        liveMaxLatencyDurationCount: 5,  // Massima latenza per playlist live
+                        maxBufferLength: 30,  // Buffer massimo in secondi
+                        maxMaxBufferLength: 60,  // Buffer massimo assoluto
+                        startLevel: -1,  // Usa il livello più alto disponibile
+                        autoStartLoad: true,  // Inizia a caricare automaticamente
+                        startPosition: -1  // Inizia dall'ultimo segmento disponibile per playlist live
                     });
                     hlsInstance.loadSource(url);
                     hlsInstance.attachMedia(videoPlayer);
                     hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+                        // Per playlist EVENT/live, cerca di partire dall'ultimo segmento
+                        if (hlsInstance.levels && hlsInstance.levels.length > 0) {
+                            const lastLevel = hlsInstance.levels.length - 1;
+                            hlsInstance.currentLevel = lastLevel;
+                        }
                         videoPlayer.play().catch(err => {
                             console.error('Errore play():', err);
                             showStatus('Stream pronto. Premi play se necessario.', 'starting');
                         });
+                    });
+                    hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+                        if (data.fatal) {
+                            console.error('Errore HLS fatale:', data);
+                            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                                console.log('Tentativo di recupero da errore di rete...');
+                                hlsInstance.startLoad();
+                            } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                                console.log('Tentativo di recupero da errore media...');
+                                hlsInstance.recoverMediaError();
+                            }
+                        }
                     });
                 } else if (videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
                     detachStream();

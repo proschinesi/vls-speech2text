@@ -37,6 +37,33 @@ except ImportError:
     print("Errore: Impossibile importare vlc_speech2text. Assicurati che il file esista.")
     sys.exit(1)
 
+try:
+    from ffmpeg_whisper import (
+        check_ffmpeg_whisper_support,
+        transcribe_with_ffmpeg_whisper
+    )
+    FFMPEG_WHISPER_AVAILABLE = True
+except ImportError:
+    FFMPEG_WHISPER_AVAILABLE = False
+    print("⚠ ffmpeg_whisper non disponibile, useremo Python Whisper")
+
+# Verifica se FFmpeg ha il filtro Whisper nativo
+_ffmpeg_whisper_supported = None
+def has_ffmpeg_whisper():
+    """Verifica se FFmpeg ha il filtro Whisper nativo."""
+    global _ffmpeg_whisper_supported
+    if _ffmpeg_whisper_supported is None:
+        if FFMPEG_WHISPER_AVAILABLE:
+            has_support, msg = check_ffmpeg_whisper_support()
+            _ffmpeg_whisper_supported = has_support
+            if has_support:
+                print(f"✓ {msg}")
+            else:
+                print(f"⚠ {msg}")
+        else:
+            _ffmpeg_whisper_supported = False
+    return _ffmpeg_whisper_supported
+
 # Configura Flask per trovare i template nella directory corretta
 template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
 app = Flask(__name__, template_folder=template_dir)
@@ -73,7 +100,15 @@ class VideoTranscriptionSession:
         # Processi
         self.ffmpeg_video_process = None
         self.ffmpeg_audio_process = None
+        self.ffmpeg_whisper_process = None  # Per filtro Whisper nativo
         self.stt = None
+        
+        # Metodo di trascrizione
+        self.use_ffmpeg_whisper = has_ffmpeg_whisper()
+        if self.use_ffmpeg_whisper:
+            print(f"[Session {session_id}] Userà filtro Whisper nativo di FFmpeg")
+        else:
+            print(f"[Session {session_id}] Userà Python Whisper (fallback)")
         
         # Stato
         self.running = False
@@ -97,29 +132,88 @@ class VideoTranscriptionSession:
     def _launch_ffmpeg_process(self):
         """Avvia o riavvia il processo FFmpeg per lo streaming video."""
         try:
-            target_output = None if self.use_hls_stream else self.video_pipe_path
-            self.ffmpeg_video_process = restart_ffmpeg_video_process(
-                self.video_url,
-                self.srt_path,
-                target_output,
-                use_http=False,
-                hls_output_dir=self.hls_dir if self.use_hls_stream else None
-            )
+            if self.use_ffmpeg_whisper:
+                # Con filtro Whisper nativo, FFmpeg fa tutto: trascrizione + burn-in
+                self.ffmpeg_video_process = self._launch_ffmpeg_with_whisper_filter()
+            else:
+                # Metodo tradizionale: usa SRT pre-generato
+                target_output = None if self.use_hls_stream else self.video_pipe_path
+                self.ffmpeg_video_process = restart_ffmpeg_video_process(
+                    self.video_url,
+                    self.srt_path,
+                    target_output,
+                    use_http=False,
+                    hls_output_dir=self.hls_dir if self.use_hls_stream else None
+                )
         except Exception as e:
             self.status = "error"
             self.error = f"Errore avvio FFmpeg: {e}"
             print(f"[Session {self.session_id}] Errore avvio FFmpeg: {e}")
             raise
     
+    def _launch_ffmpeg_with_whisper_filter(self):
+        """
+        Avvia FFmpeg con filtro Whisper nativo per trascrizione + burn-in.
+        Il filtro Whisper genera SRT, che viene poi usato per il burn-in.
+        """
+        abs_srt_path = os.path.abspath(self.srt_path)
+        escaped_srt_path = abs_srt_path.replace("'", "\\'").replace(":", "\\:")
+        
+        # Costruisci filtro Whisper
+        whisper_lang = self.language if self.language != "auto" else None
+        whisper_filter = f"whisper=model={self.model_size}"
+        if whisper_lang:
+            whisper_filter += f":language={whisper_lang}"
+        whisper_filter += f":output={escaped_srt_path}"
+        
+        # Costruisci comando FFmpeg
+        # Approccio: usa due filtri in cascata
+        # 1. Filtro Whisper per trascrivere e generare SRT
+        # 2. Filtro subtitles per burn-in
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-i", self.video_url,
+            "-af", whisper_filter,  # Filtro Whisper per trascrizione
+            "-vf", f"subtitles='{escaped_srt_path}':force_style='FontSize=24,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=2,Bold=1'",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-tune", "zerolatency",
+            "-c:a", "copy",  # Copia audio originale (il filtro Whisper non modifica l'audio)
+            "-f", "mpegts" if not self.use_hls_stream else "hls",
+        ]
+        
+        if self.use_hls_stream:
+            # HLS output
+            ffmpeg_cmd.extend([
+                "-hls_time", "2",
+                "-hls_list_size", "0",  # Lista infinita
+                "-hls_flags", "delete_segments",
+                "-hls_segment_filename", os.path.join(self.hls_dir, "segment_%03d.ts"),
+                self.hls_playlist
+            ])
+        elif self.video_pipe_path:
+            ffmpeg_cmd.extend(["-y", self.video_pipe_path])
+        else:
+            ffmpeg_cmd.append("-")  # stdout
+        
+        print(f"[Session {self.session_id}] Comando FFmpeg Whisper: {' '.join(ffmpeg_cmd)}")
+        
+        return subprocess.Popen(
+            ffmpeg_cmd,
+            stdout=subprocess.PIPE if not self.video_pipe_path and not self.use_hls_stream else subprocess.DEVNULL,
+            stderr=subprocess.PIPE
+        )
+    
     def start(self):
         """Avvia la trascrizione e lo streaming."""
         try:
             self.status = "starting"
             
-            # Carica modello Whisper
-            self.stt = VLCSpeechToText(model_size=self.model_size, language=self.language)
-            print(f"[Session {self.session_id}] Caricamento modello Whisper...")
-            self.stt.load_model()
+            # Carica modello Whisper solo se non usiamo il filtro nativo
+            if not self.use_ffmpeg_whisper:
+                self.stt = VLCSpeechToText(model_size=self.model_size, language=self.language)
+                print(f"[Session {self.session_id}] Caricamento modello Whisper...")
+                self.stt.load_model()
             
             if self.use_hls_stream:
                 # HLS directory già creata; pulisci eventuali file preesistenti
@@ -151,6 +245,38 @@ class VideoTranscriptionSession:
                     self.video_pipe_path = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False).name
                     print(f"[Session {self.session_id}] Usando file MP4: {self.video_pipe_path}")
             
+            # Avvia processamento audio/trascrizione
+            self.running = True
+            self.status = "running"
+            
+            if self.use_ffmpeg_whisper:
+                # Con filtro Whisper nativo, la trascrizione avviene direttamente in FFmpeg
+                # Avvia thread per monitorare e aggiornare SRT generato da Whisper
+                print(f"[Session {self.session_id}] Filtro Whisper nativo: trascrizione integrata in FFmpeg")
+                whisper_monitor_thread = threading.Thread(target=self._monitor_whisper_srt, daemon=True)
+                whisper_monitor_thread.start()
+            else:
+                # Con Python Whisper, avvia thread per processare audio
+                processing_thread = threading.Thread(target=self._process_audio, daemon=True)
+                processing_thread.start()
+                
+                # Con HLS, avviamo FFmpeg subito (non aspettiamo i sottotitoli)
+                # I sottotitoli verranno aggiornati in tempo reale
+                if self.use_hls_stream:
+                    print(f"[Session {self.session_id}] Avvio FFmpeg immediatamente (sottotitoli verranno aggiornati in tempo reale)")
+                else:
+                    # Per streaming non-HLS, aspettiamo alcuni sottotitoli
+                    print(f"[Session {self.session_id}] Attesa generazione sottotitoli prima di avviare FFmpeg...")
+                    max_wait = 30  # Ridotto a 30 secondi
+                    wait_count = 0
+                    while len(self.all_subtitles) < 2 and wait_count < max_wait:
+                        time.sleep(1)
+                        wait_count += 1
+                    if len(self.all_subtitles) < 2:
+                        print(f"[Session {self.session_id}] ATTENZIONE: Solo {len(self.all_subtitles)} sottotitoli generati, avvio FFmpeg comunque")
+                    else:
+                        print(f"[Session {self.session_id}] {len(self.all_subtitles)} sottotitoli generati, avvio FFmpeg...")
+            
             # Avvia FFmpeg per processare video con sottotitoli
             print(f"[Session {self.session_id}] Avvio FFmpeg per video con sottotitoli...")
             print(f"[Session {self.session_id}] File SRT: {self.srt_path}")
@@ -172,14 +298,8 @@ class VideoTranscriptionSession:
             # Verifica che FFmpeg sia ancora in esecuzione
             if self.ffmpeg_video_process.poll() is not None:
                 print(f"[Session {self.session_id}] ERRORE: FFmpeg terminato prematuramente!")
-                stderr_output = self.ffmpeg_video_process.stderr.read().decode() if self.ffmpeg_video_process.stderr else "N/A"
-                print(f"FFmpeg stderr: {stderr_output[:500]}")
-            
-            # Avvia thread per processare audio
-            self.running = True
-            self.status = "running"
-            processing_thread = threading.Thread(target=self._process_audio, daemon=True)
-            processing_thread.start()
+                stderr_output = self.ffmpeg_video_process.stderr.read().decode(errors='ignore') if self.ffmpeg_video_process.stderr else "N/A"
+                print(f"FFmpeg stderr: {stderr_output[:8000]}")
             
             return True
             
@@ -276,38 +396,48 @@ class VideoTranscriptionSession:
                                 except Exception as e:
                                     print(f"Errore scrittura SRT: {e}")
                                 
-                                # Riavvia FFmpeg ogni sottotitolo per applicare i nuovi sottotitoli immediatamente
-                                # Questo è necessario perché FFmpeg non rilegge il file SRT quando viene aggiornato
-                                # NOTA: Questo causa riscrittura del file MP4, ma è l'unico modo per vedere i sottotitoli
-                                print(f"[Session {self.session_id}] Riavvio FFmpeg per applicare {len(self.all_subtitles)} sottotitoli")
-                                try:
-                                    if self.ffmpeg_video_process:
-                                        self.ffmpeg_video_process.terminate()
-                                        try:
-                                            self.ffmpeg_video_process.wait(timeout=2)
-                                        except subprocess.TimeoutExpired:
-                                            self.ffmpeg_video_process.kill()
-                                            self.ffmpeg_video_process.wait()
-                                except Exception as e:
-                                    print(f"Errore terminazione FFmpeg: {e}")
-                                
-                                time.sleep(0.5)
-                                
-                                try:
-                                    os.sync()
-                                    if os.path.exists(self.srt_path) and os.path.getsize(self.srt_path) > 0:
-                                        srt_size = os.path.getsize(self.srt_path)
-                                        print(f"[Session {self.session_id}] File SRT verificato: {srt_size} bytes, {len(self.all_subtitles)} sottotitoli")
-                                    else:
-                                        print(f"[Session {self.session_id}] ATTENZIONE: File SRT vuoto o non trovato!")
+                                # Con HLS, non riavviamo FFmpeg per ogni sottotitolo per evitare interruzioni
+                                # FFmpeg processerà il video con i sottotitoli disponibili al momento dell'avvio
+                                # Per aggiornare i sottotitoli, riavviamo solo periodicamente (ogni 10 sottotitoli)
+                                if not self.use_hls_stream:
+                                    # Con streaming MP4, riavviamo per ogni sottotitolo
+                                    print(f"[Session {self.session_id}] Riavvio FFmpeg per applicare {len(self.all_subtitles)} sottotitoli")
+                                    try:
+                                        if self.ffmpeg_video_process:
+                                            self.ffmpeg_video_process.terminate()
+                                            try:
+                                                self.ffmpeg_video_process.wait(timeout=2)
+                                            except subprocess.TimeoutExpired:
+                                                self.ffmpeg_video_process.kill()
+                                                self.ffmpeg_video_process.wait()
+                                    except Exception as e:
+                                        print(f"Errore terminazione FFmpeg: {e}")
                                     
-                                    self._launch_ffmpeg_process()
-                                    print(f"[Session {self.session_id}] FFmpeg riavviato con SRT aggiornato")
-                                    time.sleep(2)
-                                except Exception as e:
-                                    print(f"Errore riavvio FFmpeg: {e}")
-                                    import traceback
-                                    traceback.print_exc()
+                                    time.sleep(0.5)
+                                    
+                                    try:
+                                        os.sync()
+                                        if os.path.exists(self.srt_path) and os.path.getsize(self.srt_path) > 0:
+                                            srt_size = os.path.getsize(self.srt_path)
+                                            print(f"[Session {self.session_id}] File SRT verificato: {srt_size} bytes, {len(self.all_subtitles)} sottotitoli")
+                                        else:
+                                            print(f"[Session {self.session_id}] ATTENZIONE: File SRT vuoto o non trovato!")
+                                        
+                                        self._launch_ffmpeg_process()
+                                        print(f"[Session {self.session_id}] FFmpeg riavviato con SRT aggiornato")
+                                        time.sleep(2)
+                                    except Exception as e:
+                                        print(f"Errore riavvio FFmpeg: {e}")
+                                        import traceback
+                                        traceback.print_exc()
+                                else:
+                                    # Con HLS, NON riavviamo FFmpeg per evitare discontinuità nello stream.
+                                    # FFmpeg legge il file SRT solo all'avvio, quindi i sottotitoli saranno visibili
+                                    # per la parte del video che viene processata dopo che i sottotitoli sono stati generati.
+                                    # Questo è un compromesso: i sottotitoli non saranno visibili per la parte iniziale
+                                    # del video, ma lo stream sarà stabile e continuo.
+                                    # I sottotitoli vengono comunque aggiornati nel file SRT per riferimento futuro.
+                                    pass
                                 
                                 self.subtitle_index += 1
                             
@@ -339,6 +469,73 @@ class VideoTranscriptionSession:
                 os.rmdir(chunk_dir)
             except:
                 pass
+    
+    def _monitor_whisper_srt(self):
+        """
+        Monitora il file SRT generato dal filtro Whisper nativo e aggiorna
+        la lista dei sottotitoli per l'API.
+        """
+        import re
+        last_size = 0
+        last_mtime = 0
+        
+        print(f"[Session {self.session_id}] Monitoraggio SRT generato da Whisper...")
+        
+        while self.running:
+            try:
+                if not os.path.exists(self.srt_path):
+                    time.sleep(1)
+                    continue
+                
+                current_size = os.path.getsize(self.srt_path)
+                current_mtime = os.path.getmtime(self.srt_path)
+                
+                # Se il file è cambiato, leggi e aggiorna
+                if current_size != last_size or current_mtime != last_mtime:
+                    try:
+                        with open(self.srt_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        
+                        # Parse SRT e aggiorna all_subtitles
+                        # Formato SRT: index, timestamp, text, blank line
+                        srt_pattern = r'(\d+)\s+(\d{2}):(\d{2}):(\d{2}),(\d{3})\s+-->\s+(\d{2}):(\d{2}):(\d{2}),(\d{3})\s+(.+?)(?=\n\d+\s+\d{2}:|\Z)'
+                        matches = re.findall(srt_pattern, content, re.DOTALL)
+                        
+                        new_subtitles = []
+                        for match in matches:
+                            idx = int(match[0])
+                            start_h, start_m, start_s, start_ms = map(int, match[1:5])
+                            end_h, end_m, end_s, end_ms = map(int, match[5:9])
+                            text = match[9].strip()
+                            
+                            start_time = start_h * 3600 + start_m * 60 + start_s + start_ms / 1000.0
+                            end_time = end_h * 3600 + end_m * 60 + end_s + end_ms / 1000.0
+                            
+                            subtitle = {
+                                'index': idx,
+                                'start': start_time,
+                                'end': end_time,
+                                'text': text
+                            }
+                            new_subtitles.append(subtitle)
+                        
+                        # Aggiorna solo se ci sono nuovi sottotitoli
+                        if len(new_subtitles) > len(self.all_subtitles):
+                            self.all_subtitles = new_subtitles
+                            self.subtitle_index = len(new_subtitles) + 1
+                            print(f"[Session {self.session_id}] SRT aggiornato: {len(new_subtitles)} sottotitoli da Whisper")
+                        
+                        last_size = current_size
+                        last_mtime = current_mtime
+                        
+                    except Exception as e:
+                        print(f"Errore lettura SRT Whisper: {e}")
+                
+                time.sleep(1)  # Controlla ogni secondo
+                
+            except Exception as e:
+                print(f"Errore monitoraggio SRT Whisper: {e}")
+                time.sleep(2)
     
     def stop(self):
         """Ferma la sessione."""
@@ -610,6 +807,7 @@ def start_transcription():
     
     thread = threading.Thread(target=start_in_thread, daemon=True)
     thread.start()
+    print(f"[Session {session_id}] Thread avviato")
     
     return jsonify({
         'session_id': session_id,
@@ -630,8 +828,14 @@ def stream_video(session_id):
     
     if session.use_hls_stream:
         playlist_path = os.path.join(session.hls_dir, 'stream.m3u8')
+        # Attendi fino a 10 secondi che la playlist venga generata
+        max_wait = 10
+        wait_count = 0
+        while not os.path.exists(playlist_path) and wait_count < max_wait:
+            time.sleep(0.5)
+            wait_count += 0.5
         if not os.path.exists(playlist_path):
-            return "Playlist non disponibile", 404
+            return "Playlist non disponibile (ancora in generazione)", 404
         return send_file(
             playlist_path,
             mimetype='application/vnd.apple.mpegurl',

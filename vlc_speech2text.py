@@ -322,8 +322,9 @@ def restart_ffmpeg_video_process(
         ffmpeg_cmd.extend([
             "-f", "hls",
             "-hls_time", "4",
-            "-hls_list_size", "10",
-            "-hls_flags", "delete_segments+append_list+independent_segments",
+            "-hls_list_size", "0",  # 0 = infinito (mantiene tutti i segmenti)
+            "-hls_playlist_type", "event",  # Marca come live/event playlist
+            "-hls_flags", "append_list+independent_segments",  # Rimuove delete_segments
             "-hls_segment_filename", segment_pattern,
             playlist_path
         ])
@@ -337,6 +338,11 @@ def restart_ffmpeg_video_process(
     else:
         ffmpeg_cmd.extend(["-f", "mpegts"])
     
+    try:
+        print("FFmpeg command:", " ".join(ffmpeg_cmd))
+    except Exception:
+        pass
+    
     if use_http:
         # HTTP streaming - FFmpeg come server HTTP
         ffmpeg_cmd.extend([
@@ -346,7 +352,7 @@ def restart_ffmpeg_video_process(
     elif output_path:
         # Output su file/pipe
         ffmpeg_cmd.extend(["-y", output_path])
-    else:
+    elif not use_hls:
         # Output su stdout (per pipe diretta)
         ffmpeg_cmd.append("-")
     

@@ -5,258 +5,302 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trascrizione Video con Sottotitoli</title>
     <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
             padding: 20px;
-            background: #667eea;
-            color: white;
         }
         .container {
-            max-width: 800px;
+            max-width: 1000px;
             margin: 0 auto;
             background: white;
-            color: #333;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
             padding: 30px;
-            border-radius: 10px;
+            text-align: center;
         }
-        h1 {
-            color: #667eea;
-        }
-        input, select, button {
+        .header h1 { font-size: 2.5em; margin-bottom: 10px; }
+        .content { padding: 40px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: 600; color: #555; }
+        input[type="text"], select {
             width: 100%;
-            padding: 10px;
-            margin: 10px 0;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
             font-size: 16px;
         }
-        button {
-            background: #667eea;
+        input:focus, select:focus { outline: none; border-color: #667eea; }
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
+            padding: 15px 30px;
+            font-size: 18px;
+            font-weight: 600;
+            border-radius: 8px;
             cursor: pointer;
-            border-radius: 5px;
+            width: 100%;
+            margin-top: 10px;
         }
-        button:hover {
-            background: #5568d3;
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4); }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .video-container {
+            margin-top: 30px;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+            padding-top: 56.25%;
         }
+        .video-container video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        .subtitle-overlay {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: 600;
+            text-align: center;
+            max-width: 90%;
+            z-index: 10;
+            display: none;
+        }
+        .subtitle-overlay.show {
+            display: block;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            background: #f5f5f5;
+        }
+        .status.running { background: #e8f5e9; color: #2e7d32; }
+        .status.error { background: #ffebee; color: #c62828; }
+        .hidden { display: none; }
     </style>
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
 <body>
     <div class="container">
-        <h1>🎬 Trascrizione Video con Sottotitoli</h1>
-        <p>Inserisci l'URL del video e riproducilo con sottotitoli burn-in in tempo reale</p>
-        
-        <form id="videoForm">
-            <label for="videoUrl">URL Video o Percorso File</label>
-            <input type="text" id="videoUrl" name="videoUrl" 
-                   placeholder="https://example.com/video.mp4" required>
-            
-            <label for="language">Lingua</label>
-            <select id="language" name="language">
-                <option value="auto">Rilevamento automatico</option>
-                <option value="en" selected>Inglese</option>
-                <option value="it">Italiano</option>
-            </select>
-            
-            <label for="modelSize">Modello Whisper</label>
-            <select id="modelSize" name="modelSize">
-                <option value="tiny">Tiny (veloce)</option>
-                <option value="base" selected>Base (bilanciato)</option>
-                <option value="small">Small (accurato)</option>
-            </select>
-            
-            <button type="submit">▶️ Riproduci con Sottotitoli</button>
-        </form>
-        
-        <div id="status" style="margin-top: 20px; padding: 10px; display: none;"></div>
-        <div id="videoContainer" style="margin-top: 20px; display: none;">
-            <video id="videoPlayer" controls style="width: 100%;" preload="auto" 
-                   playsinline webkit-playsinline>
-                Il tuo browser non supporta la riproduzione video.
-            </video>
+        <div class="header">
+            <h1>🎬 Trascrizione Video con Sottotitoli</h1>
+            <p>Inserisci l'URL del video e riproducilo con sottotitoli burn-in</p>
+        </div>
+        <div class="content">
+            <form id="videoForm">
+                <div class="form-group">
+                    <label for="videoUrl">URL Video o Percorso File</label>
+                    <input type="text" id="videoUrl" placeholder="https://example.com/video.mp4" required>
+                </div>
+                <div class="form-group">
+                    <label for="language">Lingua</label>
+                    <select id="language">
+                        <option value="auto">Rilevamento automatico</option>
+                        <option value="en" selected>Inglese</option>
+                        <option value="it">Italiano</option>
+                        <option value="es">Spagnolo</option>
+                        <option value="fr">Francese</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="modelSize">Modello Whisper</label>
+                    <select id="modelSize">
+                        <option value="tiny">Tiny (veloce)</option>
+                        <option value="base" selected>Base (bilanciato)</option>
+                        <option value="small">Small (accurato)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="translateToItalian" style="width: auto; margin-right: 8px;">
+                        Traduci sottotitoli in italiano
+                    </label>
+                </div>
+                <button type="submit" class="btn" id="playBtn">▶️ Riproduci con Sottotitoli</button>
+            </form>
+            <div id="status" class="status hidden"></div>
+            <div class="video-container hidden" id="videoContainer">
+                <video id="videoPlayer" controls autoplay>
+                    <track kind="subtitles" srclang="it" label="Sottotitoli" default>
+                </video>
+                <div class="subtitle-overlay" id="subtitleOverlay"></div>
+            </div>
         </div>
     </div>
-    
     <script>
-        console.log('Script caricato');
-        
-        document.addEventListener('DOMContentLoaded', function() {
-            console.log('DOM caricato');
+        let currentSessionId = null;
+        document.getElementById('videoForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const videoUrl = document.getElementById('videoUrl').value.trim();
+            const language = document.getElementById('language').value;
+            const modelSize = document.getElementById('modelSize').value;
+            const translateToItalian = document.getElementById('translateToItalian').checked;
             
-            const form = document.getElementById('videoForm');
-            const videoUrl = document.getElementById('videoUrl');
-            const status = document.getElementById('status');
-            const videoContainer = document.getElementById('videoContainer');
-            const videoPlayer = document.getElementById('videoPlayer');
-            let hlsInstance = null;
-
-            function detachStream() {
-                if (hlsInstance) {
-                    hlsInstance.destroy();
-                    hlsInstance = null;
-                }
-                videoPlayer.removeAttribute('src');
-                videoPlayer.load();
-            }
-
-            function attachStream(url) {
-                console.log('Attach stream:', url);
-                if (window.Hls && window.Hls.isSupported()) {
-                    detachStream();
-                    hlsInstance = new Hls({
-                        enableWorker: true,
-                        lowLatencyMode: true
-                    });
-                    hlsInstance.loadSource(url);
-                    hlsInstance.attachMedia(videoPlayer);
-                    hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
-                        videoPlayer.play().catch(err => {
-                            console.error('Errore play():', err);
-                            status.textContent = 'Clicca play manualmente se necessario.';
-                            status.style.background = '#fff3e0';
-                            status.style.color = '#e65100';
-                        });
-                    });
-                } else if (videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
-                    detachStream();
-                    videoPlayer.src = url;
-                    videoPlayer.play().catch(err => {
-                        console.error('Errore play():', err);
-                        status.textContent = 'Clicca play manualmente se necessario.';
-                        status.style.background = '#fff3e0';
-                        status.style.color = '#e65100';
-                    });
-                } else {
-                    status.textContent = 'Browser non supporta HLS. Usa un browser moderno.';
-                    status.style.background = '#ffebee';
-                    status.style.color = '#c62828';
-                }
-            }
-            
-            if (!form) {
-                console.error('Form non trovato!');
+            if (!videoUrl) {
+                showStatus('Inserisci un URL video', 'error');
                 return;
             }
             
-            form.addEventListener('submit', async function(e) {
-                e.preventDefault();
-                console.log('Form inviato');
+            const btn = document.getElementById('playBtn');
+            btn.disabled = true;
+            btn.textContent = 'Avvio...';
+            showStatus('Avvio trascrizione...', 'running');
+            
+            try {
+                const requestBody = {
+                    video_url: videoUrl,
+                    language: language,
+                    model_size: modelSize
+                };
                 
-                const url = videoUrl.value.trim();
-                if (!url) {
-                    status.textContent = 'Inserisci un URL video';
-                    status.style.display = 'block';
-                    status.style.background = '#ffebee';
-                    status.style.color = '#c62828';
-                    return;
+                if (translateToItalian) {
+                    requestBody.translate_to = 'it';
                 }
                 
-                status.textContent = 'Avvio trascrizione...';
-                status.style.display = 'block';
-                status.style.background = '#fff3e0';
-                status.style.color = '#e65100';
+                const response = await fetch('/api/start', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(requestBody)
+                });
                 
-                try {
-                    const response = await fetch('/api/start', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            video_url: url,
-                            language: document.getElementById('language').value,
-                            model_size: document.getElementById('modelSize').value,
-                            chunk_duration: 10
-                        })
-                    });
+                const data = await response.json();
+                
+                if (response.ok) {
+                    currentSessionId = data.session_id;
+                    const video = document.getElementById('videoPlayer');
+                    video.src = window.location.origin + data.stream_url;
                     
-                    const data = await response.json();
-                    console.log('Risposta:', data);
-                    
-                    if (response.ok) {
-                        const streamUrl = window.location.origin + data.stream_url;
-                        console.log('Stream URL:', streamUrl);
+                    // Aggiungi sottotitoli esterni
+                    if (data.subtitles_url) {
+                        // Rimuovi track esistenti
+                        const existingTracks = video.querySelectorAll('track');
+                        existingTracks.forEach(track => track.remove());
                         
-                        // Attendi un momento prima di impostare lo stream
-                        setTimeout(() => {
-                            console.log('Impostazione stream URL:', streamUrl);
-                            videoContainer.style.display = 'block';
-                            
-                            // Gestisci errori del video player
-                            videoPlayer.addEventListener('error', (e) => {
-                                console.error('Errore video player:', e);
-                                console.error('Error code:', videoPlayer.error?.code);
-                                console.error('Error message:', videoPlayer.error?.message);
-                                
-                                let errorMsg = 'Errore riproduzione video. ';
-                                if (videoPlayer.error) {
-                                    switch(videoPlayer.error.code) {
-                                        case 1: errorMsg += 'MEDIA_ERR_ABORTED'; break;
-                                        case 2: errorMsg += 'MEDIA_ERR_NETWORK - Problema di rete o formato non supportato'; break;
-                                        case 3: errorMsg += 'MEDIA_ERR_DECODE - Formato non supportato dal browser'; break;
-                                        case 4: errorMsg += 'MEDIA_ERR_SRC_NOT_SUPPORTED - Formato MPEG-TS potrebbe non essere supportato'; break;
-                                        default: errorMsg += 'Errore sconosciuto';
-                                    }
-                                }
-                                status.textContent = errorMsg + ' Verifica console per dettagli.';
-                                status.style.background = '#ffebee';
-                                status.style.color = '#c62828';
-                            });
-                            
-                            videoPlayer.addEventListener('loadstart', () => {
-                                console.log('Video: loadstart - inizio caricamento');
-                                status.textContent = 'Caricamento video in corso...';
-                                status.style.background = '#fff3e0';
-                                status.style.color = '#e65100';
-                            });
-                            
-                            videoPlayer.addEventListener('loadedmetadata', () => {
-                                console.log('Video: loadedmetadata - metadati caricati');
-                            });
-                            
-                            videoPlayer.addEventListener('loadeddata', () => {
-                                console.log('Video: loadeddata - primi frame caricati');
-                            });
-                            
-                            videoPlayer.addEventListener('canplay', () => {
-                                console.log('Video: canplay - pronto per riproduzione');
-                                status.textContent = 'Video caricato, riproduzione in corso...';
-                                status.style.background = '#e8f5e9';
-                                status.style.color = '#2e7d32';
-                            });
-                            
-                            videoPlayer.addEventListener('waiting', () => {
-                                console.log('Video: waiting - bufferizzazione');
-                                status.textContent = 'Bufferizzazione in corso...';
-                                status.style.background = '#fff3e0';
-                                status.style.color = '#e65100';
-                            });
-                            
-                            videoPlayer.addEventListener('stalled', () => {
-                                console.warn('Video: stalled - stream bloccato');
-                                status.textContent = 'Stream in pausa, bufferizzazione...';
-                            });
-                            
-                            attachStream(streamUrl);
-                        }, 2000);
+                        // Crea nuovo elemento track
+                        const track = document.createElement('track');
+                        track.kind = 'subtitles';
+                        track.srclang = language || 'en';
+                        track.label = 'Sottotitoli';
+                        track.default = true;
+                        track.src = window.location.origin + data.subtitles_url;
+                        video.appendChild(track);
                         
-                        status.textContent = 'Avvio streaming...';
-                        status.style.background = '#fff3e0';
-                        status.style.color = '#e65100';
-                    } else {
-                        status.textContent = 'Errore: ' + (data.error || 'Errore sconosciuto');
-                        status.style.background = '#ffebee';
-                        status.style.color = '#c62828';
+                        // Forza ricaricamento sottotitoli quando il video è pronto
+                        video.addEventListener('loadedmetadata', () => {
+                            console.log('Video metadata caricato, sottotitoli URL:', track.src);
+                            // Abilita sottotitoli
+                            if (video.textTracks && video.textTracks.length > 0) {
+                                video.textTracks[0].mode = 'showing';
+                                console.log('Sottotitoli abilitati');
+                            }
+                        });
+                        
+                        // Aggiorna sottotitoli periodicamente
+                        setInterval(() => {
+                            if (track.src) {
+                                track.src = window.location.origin + data.subtitles_url + '?t=' + Date.now();
+                            }
+                        }, 5000); // Aggiorna ogni 5 secondi
                     }
-                } catch (error) {
-                    console.error('Errore:', error);
-                    status.textContent = 'Errore di connessione: ' + error.message;
-                    status.style.background = '#ffebee';
-                    status.style.color = '#c62828';
+                    
+                    document.getElementById('videoContainer').classList.remove('hidden');
+                    showStatus('Trascrizione in corso...', 'running');
+                    startStatusPolling();
+                } else {
+                    showStatus('Errore: ' + (data.error || 'Errore sconosciuto'), 'error');
+                    btn.disabled = false;
+                    btn.textContent = '▶️ Riproduci con Sottotitoli';
                 }
-            });
+            } catch (error) {
+                showStatus('Errore: ' + error.message, 'error');
+                btn.disabled = false;
+                btn.textContent = '▶️ Riproduci con Sottotitoli';
+            }
+        });
+        
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${type}`;
+            status.classList.remove('hidden');
+        }
+        
+        let subtitleOverlay = null;
+        let currentSubtitles = [];
+        
+        function startStatusPolling() {
+            setInterval(async () => {
+                if (!currentSessionId) return;
+                try {
+                    const response = await fetch(`/api/status/${currentSessionId}`);
+                    const data = await response.json();
+                    if (data.status === 'running') {
+                        const statusMsg = data.translated 
+                            ? `Trascrizione: ${data.subtitles_count} sottotitoli generati e tradotti in italiano`
+                            : `Trascrizione: ${data.subtitles_count} sottotitoli generati`;
+                        showStatus(statusMsg, 'running');
+                        
+                        // Aggiorna lista sottotitoli per overlay (usa quelli tradotti se disponibili)
+                        if (data.subtitles && data.subtitles.length > 0) {
+                            currentSubtitles = data.subtitles;
+                            console.log(`Aggiornati ${currentSubtitles.length} sottotitoli (tradotti: ${data.translated ? 'sì' : 'no'})`);
+                        }
+                    } else if (data.status === 'error') {
+                        showStatus('Errore: ' + (data.error || ''), 'error');
+                    }
+                } catch (e) {
+                    console.error('Errore polling:', e);
+                }
+            }, 2000);
+        }
+        
+        function updateSubtitleOverlay() {
+            if (!subtitleOverlay) {
+                subtitleOverlay = document.getElementById('subtitleOverlay');
+            }
+            
+            const video = document.getElementById('videoPlayer');
+            if (!video || !subtitleOverlay || currentSubtitles.length === 0) return;
+            
+            const currentTime = video.currentTime;
+            
+            // Trova il sottotitolo attivo
+            const activeSubtitle = currentSubtitles.find(sub => 
+                currentTime >= sub.start && currentTime <= sub.end
+            );
+            
+            if (activeSubtitle) {
+                subtitleOverlay.textContent = activeSubtitle.text;
+                subtitleOverlay.classList.add('show');
+            } else {
+                subtitleOverlay.classList.remove('show');
+            }
+        }
+        
+        // Aggiorna overlay sottotitoli durante la riproduzione
+        document.addEventListener('DOMContentLoaded', () => {
+            const video = document.getElementById('videoPlayer');
+            if (video) {
+                video.addEventListener('timeupdate', updateSubtitleOverlay);
+            }
         });
     </script>
 </body>
 </html>
-

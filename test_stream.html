@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Stream</title>
+    <meta charset="UTF-8">
+</head>
+<body>
+    <h1>Test Video Stream</h1>
+    <video id="video" controls width="800" height="600">
+        Il tuo browser non supporta la riproduzione video.
+    </video>
+    <div id="status"></div>
+    
+    <script>
+        const video = document.getElementById('video');
+        const status = document.getElementById('status');
+        
+        // Test con session_1
+        const streamUrl = 'http://localhost:8080/api/stream/session_1';
+        
+        console.log('Test stream URL:', streamUrl);
+        status.textContent = 'Caricamento stream...';
+        
+        video.addEventListener('loadstart', () => {
+            console.log('✓ loadstart');
+            status.textContent = 'loadstart - inizio caricamento';
+        });
+        
+        video.addEventListener('loadedmetadata', () => {
+            console.log('✓ loadedmetadata');
+            status.textContent = 'loadedmetadata - metadati caricati';
+        });
+        
+        video.addEventListener('loadeddata', () => {
+            console.log('✓ loadeddata');
+            status.textContent = 'loadeddata - primi frame';
+        });
+        
+        video.addEventListener('canplay', () => {
+            console.log('✓ canplay');
+            status.textContent = 'canplay - pronto per riproduzione';
+        });
+        
+        video.addEventListener('canplaythrough', () => {
+            console.log('✓ canplaythrough');
+            status.textContent = 'canplaythrough - buffer completo';
+        });
+        
+        video.addEventListener('play', () => {
+            console.log('✓ play');
+            status.textContent = 'play - riproduzione avviata';
+        });
+        
+        video.addEventListener('error', (e) => {
+            console.error('✗ Errore video:', e);
+            console.error('Error code:', video.error?.code);
+            console.error('Error message:', video.error?.message);
+            
+            let msg = 'ERRORE: ';
+            if (video.error) {
+                switch(video.error.code) {
+                    case 1: msg += 'MEDIA_ERR_ABORTED'; break;
+                    case 2: msg += 'MEDIA_ERR_NETWORK'; break;
+                    case 3: msg += 'MEDIA_ERR_DECODE'; break;
+                    case 4: msg += 'MEDIA_ERR_SRC_NOT_SUPPORTED (Formato non supportato)'; break;
+                    default: msg += 'Errore sconosciuto';
+                }
+            }
+            status.textContent = msg;
+            status.style.color = 'red';
+        });
+        
+        video.addEventListener('waiting', () => {
+            console.warn('⏳ waiting - in attesa di dati');
+            status.textContent = 'waiting - buffer in attesa';
+        });
+        
+        video.addEventListener('stalled', () => {
+            console.warn('⏸ stalled - stream bloccato');
+            status.textContent = 'stalled - stream bloccato';
+        });
+        
+        // Imposta lo stream
+        video.src = streamUrl;
+        video.type = 'video/mp2t';
+        
+        // Prova a riprodurre dopo 2 secondi
+        setTimeout(() => {
+            video.play().then(() => {
+                console.log('✓ play() riuscito');
+                status.textContent = 'Riproduzione avviata con successo!';
+                status.style.color = 'green';
+            }).catch(err => {
+                console.error('✗ Errore play():', err);
+                status.textContent = 'Errore play(): ' + err.message;
+                status.style.color = 'red';
+            });
+        }, 2000);
+    </script>
+</body>
+</html>
+
