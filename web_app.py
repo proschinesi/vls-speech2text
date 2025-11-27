@@ -104,8 +104,6 @@ class VideoTranscriptionSession:
                 if os.path.exists(self.video_pipe_path):
                     os.unlink(self.video_pipe_path)
                 
-                # Su macOS, le named pipe potrebbero avere problemi, usa un file temporaneo come fallback
-                if sys.platform == 'darwin':
                 # Su macOS, usa sempre file MP4 invece di pipe (più compatibile con browser)
                 if sys.platform == 'darwin':
                     # Usa MP4 per migliore compatibilità browser
