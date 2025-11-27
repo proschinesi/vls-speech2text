@@ -66,8 +66,23 @@ echo "Installazione dipendenze Python..."
 sudo $APP_DIR/venv/bin/pip install --upgrade pip
 sudo $APP_DIR/venv/bin/pip install -r $APP_DIR/requirements.txt
 
-# Imposta permessi
-sudo chown -R $USER:$USER $APP_DIR
+# Imposta permessi (usa l'utente corrente o un utente non-root)
+if [ "$EUID" -eq 0 ]; then
+    # Se eseguito come root, trova un utente non-root
+    if id "ubuntu" &>/dev/null; then
+        APP_USER="ubuntu"
+    elif id "debian" &>/dev/null; then
+        APP_USER="debian"
+    else
+        APP_USER=$(ls /home | head -1)
+    fi
+else
+    APP_USER=$USER
+fi
+
+echo "Utente applicazione: $APP_USER"
+sudo chown -R $APP_USER:$APP_USER $APP_DIR
+sudo chmod -R 755 $APP_DIR
 
 echo -e "${GREEN}[4/6] Configurazione systemd service...${NC}"
 # Crea file systemd service
@@ -78,7 +93,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=$USER
+User=$APP_USER
 WorkingDirectory=$APP_DIR
 Environment="PATH=$APP_DIR/venv/bin"
 ExecStart=$APP_DIR/venv/bin/python $APP_DIR/web_app.py --host 0.0.0.0 --port 5000
