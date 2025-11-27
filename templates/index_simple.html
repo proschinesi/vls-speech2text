@@ -69,7 +69,9 @@
         
         <div id="status" style="margin-top: 20px; padding: 10px; display: none;"></div>
         <div id="videoContainer" style="margin-top: 20px; display: none;">
-            <video id="videoPlayer" controls style="width: 100%;"></video>
+            <video id="videoPlayer" controls style="width: 100%;" type="video/mp2t" preload="auto">
+                Il tuo browser non supporta la riproduzione video.
+            </video>
         </div>
     </div>
     
@@ -126,11 +128,82 @@
                     console.log('Risposta:', data);
                     
                     if (response.ok) {
-                        videoPlayer.src = window.location.origin + data.stream_url;
-                        videoContainer.style.display = 'block';
-                        status.textContent = 'Trascrizione in corso...';
-                        status.style.background = '#e8f5e9';
-                        status.style.color = '#2e7d32';
+                        const streamUrl = window.location.origin + data.stream_url;
+                        console.log('Stream URL:', streamUrl);
+                        
+                        // Attendi un momento prima di impostare lo stream
+                        setTimeout(() => {
+                            console.log('Impostazione stream URL:', streamUrl);
+                            videoPlayer.src = streamUrl;
+                            videoContainer.style.display = 'block';
+                            
+                            // Gestisci errori del video player
+                            videoPlayer.addEventListener('error', (e) => {
+                                console.error('Errore video player:', e);
+                                console.error('Error code:', videoPlayer.error?.code);
+                                console.error('Error message:', videoPlayer.error?.message);
+                                
+                                let errorMsg = 'Errore riproduzione video. ';
+                                if (videoPlayer.error) {
+                                    switch(videoPlayer.error.code) {
+                                        case 1: errorMsg += 'MEDIA_ERR_ABORTED'; break;
+                                        case 2: errorMsg += 'MEDIA_ERR_NETWORK - Problema di rete o formato non supportato'; break;
+                                        case 3: errorMsg += 'MEDIA_ERR_DECODE - Formato non supportato dal browser'; break;
+                                        case 4: errorMsg += 'MEDIA_ERR_SRC_NOT_SUPPORTED - Formato MPEG-TS potrebbe non essere supportato'; break;
+                                        default: errorMsg += 'Errore sconosciuto';
+                                    }
+                                }
+                                status.textContent = errorMsg + ' Verifica console per dettagli.';
+                                status.style.background = '#ffebee';
+                                status.style.color = '#c62828';
+                            });
+                            
+                            videoPlayer.addEventListener('loadstart', () => {
+                                console.log('Video: loadstart - inizio caricamento');
+                                status.textContent = 'Caricamento video in corso...';
+                                status.style.background = '#fff3e0';
+                                status.style.color = '#e65100';
+                            });
+                            
+                            videoPlayer.addEventListener('loadedmetadata', () => {
+                                console.log('Video: loadedmetadata - metadati caricati');
+                            });
+                            
+                            videoPlayer.addEventListener('loadeddata', () => {
+                                console.log('Video: loadeddata - primi frame caricati');
+                            });
+                            
+                            videoPlayer.addEventListener('canplay', () => {
+                                console.log('Video: canplay - pronto per riproduzione');
+                                status.textContent = 'Video caricato, riproduzione in corso...';
+                                status.style.background = '#e8f5e9';
+                                status.style.color = '#2e7d32';
+                            });
+                            
+                            videoPlayer.addEventListener('waiting', () => {
+                                console.log('Video: waiting - in attesa di dati');
+                            });
+                            
+                            videoPlayer.addEventListener('stalled', () => {
+                                console.warn('Video: stalled - stream bloccato');
+                            });
+                            
+                            // Prova a riprodurre
+                            setTimeout(() => {
+                                videoPlayer.play().then(() => {
+                                    console.log('Video: play() riuscito');
+                                }).catch(err => {
+                                    console.error('Errore play():', err);
+                                    status.textContent = 'Impossibile avviare la riproduzione automatica. Clicca play manualmente.';
+                                    status.style.background = '#fff3e0';
+                                    status.style.color = '#e65100';
+                                });
+                            }, 1000);
+                        }, 3000); // Attendi 3 secondi per permettere a FFmpeg di iniziare a scrivere
+                        
+                        status.textContent = 'Avvio streaming...';
+                        status.style.background = '#fff3e0';
+                        status.style.color = '#e65100';
                     } else {
                         status.textContent = 'Errore: ' + (data.error || 'Errore sconosciuto');
                         status.style.background = '#ffebee';
