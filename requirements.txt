@@ -8,3 +8,4 @@ flask-cors>=4.0.0
 # pydub opzionale (problemi con Python 3.13+)
 # pydub>=0.25.1
 
+deep-translator>=1.11.0
