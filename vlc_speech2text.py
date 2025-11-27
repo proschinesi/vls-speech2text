@@ -272,12 +272,25 @@ def restart_ffmpeg_video_process(input_source, srt_path, output_path=None, use_h
     if output_path and not output_path.endswith('.ts'):
         use_mp4 = True
     
-    # Verifica che il file SRT esista e non sia vuoto
-    if not os.path.exists(srt_path) or os.path.getsize(srt_path) == 0:
-        print(f"ATTENZIONE: File SRT non trovato o vuoto: {srt_path}")
-        # Crea un file SRT minimo
-        with open(srt_path, 'w', encoding='utf-8') as f:
-            f.write("1\n00:00:00,000 --> 00:00:01,000\nCaricamento sottotitoli...\n\n")
+    # Verifica che il file SRT esista
+    if not os.path.exists(srt_path):
+        print(f"ATTENZIONE: File SRT non trovato: {srt_path}")
+        try:
+            with open(srt_path, 'w', encoding='utf-8') as f:
+                f.write("1\n00:00:00,000 --> 00:00:01,000\nCaricamento sottotitoli...\n\n")
+            print(f"File SRT creato: {srt_path}")
+        except Exception as e:
+            print(f"Errore creazione SRT: {e}")
+    elif os.path.getsize(srt_path) == 0:
+        print(f"ATTENZIONE: File SRT vuoto: {srt_path}")
+        try:
+            with open(srt_path, 'w', encoding='utf-8') as f:
+                f.write("1\n00:00:00,000 --> 00:00:01,000\nCaricamento sottotitoli...\n\n")
+        except Exception as e:
+            print(f"Errore scrittura SRT: {e}")
+    else:
+        srt_size = os.path.getsize(srt_path)
+        print(f"File SRT trovato: {srt_path} ({srt_size} bytes)")
     
     ffmpeg_cmd = [
         "ffmpeg",
