@@ -268,7 +268,7 @@ def restart_ffmpeg_video_process(input_source, srt_path, output_path=None, use_h
     
     # Determina formato output in base al percorso
     # Se è una pipe o file .ts, usa MPEG-TS, altrimenti MP4
-    use_mp4 = False
+    use_mp4 = use_http
     if output_path and not output_path.endswith('.ts'):
         use_mp4 = True
     

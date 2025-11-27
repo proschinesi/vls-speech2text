@@ -11,9 +11,11 @@ import tempfile
 import threading
 import time
 import json
+import socket
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
+import requests
 
 # Import fcntl solo su sistemi Unix (non Windows)
 try:
@@ -21,6 +23,19 @@ try:
     HAS_FCNTL = True
 except ImportError:
     HAS_FCNTL = False
+
+# Utility per trovare una porta libera
+def find_free_port(start_port=10000, max_port=20000):
+    """Trova una porta TCP libera."""
+    for port in range(start_port, max_port):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError("Impossibile trovare una porta libera per lo streaming HTTP")
 
 # Aggiungi il percorso dello script principale
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -61,7 +76,19 @@ class VideoTranscriptionSession:
         
         # File temporanei
         self.srt_path = os.path.join(TEMP_DIR, f"subs_{session_id}.srt")
-        self.video_pipe_path = os.path.join(TEMP_DIR, f"video_{session_id}.ts")
+        self.video_pipe_path = None  # usato solo per modalità file
+        
+        # Streaming HTTP (default)
+        self.use_http_stream = True
+        self.http_port = None
+        self.http_stream_url = None
+        self.http_headers = {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+            'X-Accel-Buffering': 'no',
+            'Accept-Ranges': 'bytes'
+        }
         
         # Processi
         self.ffmpeg_video_process = None
@@ -87,6 +114,23 @@ class VideoTranscriptionSession:
             f.write("Caricamento sottotitoli...\n")
             f.write("\n")
     
+    def _launch_ffmpeg_process(self):
+        """Avvia o riavvia il processo FFmpeg per lo streaming video."""
+        try:
+            target_output = None if self.use_http_stream else self.video_pipe_path
+            self.ffmpeg_video_process = restart_ffmpeg_video_process(
+                self.video_url,
+                self.srt_path,
+                target_output,
+                use_http=self.use_http_stream,
+                http_port=self.http_port
+            )
+        except Exception as e:
+            self.status = "error"
+            self.error = f"Errore avvio FFmpeg: {e}"
+            print(f"[Session {self.session_id}] Errore avvio FFmpeg: {e}")
+            raise
+    
     def start(self):
         """Avvia la trascrizione e lo streaming."""
         try:
@@ -97,48 +141,46 @@ class VideoTranscriptionSession:
             print(f"[Session {self.session_id}] Caricamento modello Whisper...")
             self.stt.load_model()
             
-            # Per il web, usiamo una pipe e Flask servirà lo stream via HTTP
-            # Crea named pipe per video
-            import stat
-            try:
-                if os.path.exists(self.video_pipe_path):
-                    os.unlink(self.video_pipe_path)
-                
-                # Su macOS, usa sempre file MP4 invece di pipe (più compatibile con browser)
-                if sys.platform == 'darwin':
-                    # Usa MP4 per migliore compatibilità browser
-                    self.video_pipe_path = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False).name
-                    print(f"[Session {self.session_id}] Usando file MP4: {self.video_pipe_path}")
-                else:
-                    # Linux: prova con named pipe
-                    try:
-                        os.mkfifo(self.video_pipe_path, stat.S_IRUSR | stat.S_IWUSR)
-                        print(f"[Session {self.session_id}] Named pipe creata: {self.video_pipe_path}")
-                    except Exception as e:
-                        print(f"[Session {self.session_id}] Errore creazione pipe, uso file MP4: {e}")
+            if self.use_http_stream:
+                self.http_port = find_free_port()
+                self.http_stream_url = f"http://127.0.0.1:{self.http_port}"
+                print(f"[Session {self.session_id}] Streaming HTTP su porta {self.http_port}")
+            else:
+                import stat
+                try:
+                    if self.video_pipe_path and os.path.exists(self.video_pipe_path):
+                        os.unlink(self.video_pipe_path)
+                except OSError:
+                    pass
+                try:
+                    if sys.platform == 'darwin':
                         self.video_pipe_path = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False).name
                         print(f"[Session {self.session_id}] Usando file MP4: {self.video_pipe_path}")
-            except Exception as e:
-                print(f"Errore creazione pipe: {e}")
-                self.video_pipe_path = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False).name
-                print(f"[Session {self.session_id}] Usando file MP4: {self.video_pipe_path}")
+                    else:
+                        self.video_pipe_path = os.path.join(TEMP_DIR, f"video_{self.session_id}.ts")
+                        if os.path.exists(self.video_pipe_path):
+                            os.unlink(self.video_pipe_path)
+                        os.mkfifo(self.video_pipe_path, stat.S_IRUSR | stat.S_IWUSR)
+                        print(f"[Session {self.session_id}] Named pipe creata: {self.video_pipe_path}")
+                except Exception as e:
+                    print(f"[Session {self.session_id}] Errore creazione pipe, uso file MP4: {e}")
+                    self.video_pipe_path = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False).name
+                    print(f"[Session {self.session_id}] Usando file MP4: {self.video_pipe_path}")
             
             # Avvia FFmpeg per processare video con sottotitoli
             print(f"[Session {self.session_id}] Avvio FFmpeg per video con sottotitoli...")
             print(f"[Session {self.session_id}] File SRT: {self.srt_path}")
-            print(f"[Session {self.session_id}] File output: {self.video_pipe_path}")
+            if self.use_http_stream:
+                print(f"[Session {self.session_id}] HTTP stream: {self.http_stream_url}")
+            else:
+                print(f"[Session {self.session_id}] File output: {self.video_pipe_path}")
             
             # Verifica che il file SRT esista prima di avviare FFmpeg
             if not os.path.exists(self.srt_path):
                 print(f"[Session {self.session_id}] ERRORE: File SRT non trovato, creazione...")
                 self._init_srt_file()
             
-            self.ffmpeg_video_process = restart_ffmpeg_video_process(
-                self.video_url,
-                self.srt_path,
-                self.video_pipe_path,
-                use_http=False
-            )
+            self._launch_ffmpeg_process()
             
             # Attendi che FFmpeg inizi a scrivere
             time.sleep(3)
@@ -265,30 +307,19 @@ class VideoTranscriptionSession:
                                 except Exception as e:
                                     print(f"Errore terminazione FFmpeg: {e}")
                                 
-                                # Attendi che il processo sia completamente terminato
                                 time.sleep(0.5)
                                 
-                                # Riavvia FFmpeg con il file SRT aggiornato
                                 try:
-                                    # Forza flush del file SRT
-                                    os.sync()  # Sincronizza filesystem
-                                    
-                                    # Verifica che il file SRT sia stato scritto
+                                    os.sync()
                                     if os.path.exists(self.srt_path) and os.path.getsize(self.srt_path) > 0:
                                         srt_size = os.path.getsize(self.srt_path)
                                         print(f"[Session {self.session_id}] File SRT verificato: {srt_size} bytes, {len(self.all_subtitles)} sottotitoli")
                                     else:
                                         print(f"[Session {self.session_id}] ATTENZIONE: File SRT vuoto o non trovato!")
                                     
-                                    # Riavvia FFmpeg
-                                    self.ffmpeg_video_process = restart_ffmpeg_video_process(
-                                        self.video_url,
-                                        self.srt_path,
-                                        self.video_pipe_path,
-                                        use_http=False
-                                    )
+                                    self._launch_ffmpeg_process()
                                     print(f"[Session {self.session_id}] FFmpeg riavviato con SRT aggiornato")
-                                    time.sleep(2)  # Attendi che FFmpeg inizi a scrivere
+                                    time.sleep(2)
                                 except Exception as e:
                                     print(f"Errore riavvio FFmpeg: {e}")
                                     import traceback
@@ -415,13 +446,11 @@ class VideoTranscriptionSession:
             print(f"Errore rimozione SRT: {e}")
         
         try:
-            if os.path.exists(self.video_pipe_path):
-                # Se è una pipe, rimuovila
-                if os.path.exists(self.video_pipe_path):
-                    try:
-                        os.unlink(self.video_pipe_path)
-                    except:
-                        pass
+            if self.video_pipe_path and os.path.exists(self.video_pipe_path):
+                try:
+                    os.unlink(self.video_pipe_path)
+                except:
+                    pass
         except Exception as e:
             print(f"Errore rimozione pipe: {e}")
         
@@ -611,7 +640,36 @@ def stream_video(session_id):
     
     session = sessions[session_id]
     
-    if not os.path.exists(session.video_pipe_path):
+    if session.use_http_stream:
+        def generate_http():
+            reconnect_delay = 0.5
+            while session.running:
+                if not session.http_stream_url:
+                    time.sleep(0.2)
+                    continue
+                try:
+                    with requests.get(session.http_stream_url, stream=True, timeout=5) as resp:
+                        resp.raise_for_status()
+                        for chunk in resp.iter_content(chunk_size=1024 * 64):
+                            if not session.running:
+                                break
+                            if chunk:
+                                yield chunk
+                    if not session.running:
+                        break
+                    time.sleep(reconnect_delay)
+                except requests.RequestException as e:
+                    print(f"[Session {session_id}] Errore stream HTTP: {e}")
+                    if not session.running:
+                        break
+                    time.sleep(1)
+        return Response(
+            stream_with_context(generate_http()),
+            mimetype='video/mp4',
+            headers=session.http_headers
+        )
+    
+    if not session.video_pipe_path or not os.path.exists(session.video_pipe_path):
         return "Stream non disponibile", 404
     
     def generate():
