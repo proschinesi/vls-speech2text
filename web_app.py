@@ -15,6 +15,13 @@ from pathlib import Path
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 
+# Import fcntl solo su sistemi Unix (non Windows)
+try:
+    import fcntl
+    HAS_FCNTL = True
+except ImportError:
+    HAS_FCNTL = False
+
 # Aggiungi il percorso dello script principale
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -96,10 +103,24 @@ class VideoTranscriptionSession:
             try:
                 if os.path.exists(self.video_pipe_path):
                     os.unlink(self.video_pipe_path)
-                os.mkfifo(self.video_pipe_path, stat.S_IRUSR | stat.S_IWUSR)
+                
+                # Su macOS, le named pipe potrebbero avere problemi, usa un file temporaneo come fallback
+                if sys.platform == 'darwin':
+                    # Su macOS, prova prima con una pipe, ma prepara un fallback
+                    try:
+                        os.mkfifo(self.video_pipe_path, stat.S_IRUSR | stat.S_IWUSR)
+                        print(f"[Session {self.session_id}] Named pipe creata: {self.video_pipe_path}")
+                    except Exception as e:
+                        print(f"[Session {self.session_id}] Errore creazione pipe, uso file temporaneo: {e}")
+                        self.video_pipe_path = tempfile.NamedTemporaryFile(suffix='.ts', delete=False).name
+                else:
+                    # Linux: usa named pipe
+                    os.mkfifo(self.video_pipe_path, stat.S_IRUSR | stat.S_IWUSR)
+                    print(f"[Session {self.session_id}] Named pipe creata: {self.video_pipe_path}")
             except Exception as e:
                 print(f"Errore creazione pipe: {e}")
                 self.video_pipe_path = tempfile.NamedTemporaryFile(suffix='.ts', delete=False).name
+                print(f"[Session {self.session_id}] Usando file temporaneo: {self.video_pipe_path}")
             
             # Avvia FFmpeg per processare video con sottotitoli
             print(f"[Session {self.session_id}] Avvio FFmpeg per video con sottotitoli...")
@@ -258,39 +279,104 @@ class VideoTranscriptionSession:
         
         if self.ffmpeg_video_process:
             try:
+                # Chiudi stdin, stdout, stderr prima di terminare
+                if self.ffmpeg_video_process.stdin:
+                    try:
+                        self.ffmpeg_video_process.stdin.close()
+                    except:
+                        pass
+                if self.ffmpeg_video_process.stdout:
+                    try:
+                        self.ffmpeg_video_process.stdout.close()
+                    except:
+                        pass
+                if self.ffmpeg_video_process.stderr:
+                    try:
+                        self.ffmpeg_video_process.stderr.close()
+                    except:
+                        pass
+                
+                # Termina il processo
                 self.ffmpeg_video_process.terminate()
-                self.ffmpeg_video_process.wait(timeout=5)
-            except:
                 try:
+                    self.ffmpeg_video_process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    # Se non termina, forza kill
                     self.ffmpeg_video_process.kill()
+                    self.ffmpeg_video_process.wait()
+            except Exception as e:
+                print(f"Errore terminazione ffmpeg_video_process: {e}")
+                try:
+                    if self.ffmpeg_video_process.poll() is None:
+                        self.ffmpeg_video_process.kill()
                 except:
                     pass
+            finally:
+                self.ffmpeg_video_process = None
         
         if self.ffmpeg_audio_process:
             try:
+                # Chiudi stdin, stdout, stderr prima di terminare
+                if self.ffmpeg_audio_process.stdin:
+                    try:
+                        self.ffmpeg_audio_process.stdin.close()
+                    except:
+                        pass
+                if self.ffmpeg_audio_process.stdout:
+                    try:
+                        self.ffmpeg_audio_process.stdout.close()
+                    except:
+                        pass
+                if self.ffmpeg_audio_process.stderr:
+                    try:
+                        self.ffmpeg_audio_process.stderr.close()
+                    except:
+                        pass
+                
+                # Termina il processo
                 self.ffmpeg_audio_process.terminate()
-                self.ffmpeg_audio_process.wait(timeout=5)
-            except:
                 try:
+                    self.ffmpeg_audio_process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    # Se non termina, forza kill
                     self.ffmpeg_audio_process.kill()
+                    self.ffmpeg_audio_process.wait()
+            except Exception as e:
+                print(f"Errore terminazione ffmpeg_audio_process: {e}")
+                try:
+                    if self.ffmpeg_audio_process.poll() is None:
+                        self.ffmpeg_audio_process.kill()
                 except:
                     pass
+            finally:
+                self.ffmpeg_audio_process = None
     
     def cleanup(self):
-        """Pulisce i file temporanei."""
+        """Pulisce i file temporanei e le risorse."""
         self.stop()
         
+        # Pulisci file temporanei
         try:
             if os.path.exists(self.srt_path):
                 os.unlink(self.srt_path)
-        except:
-            pass
+        except Exception as e:
+            print(f"Errore rimozione SRT: {e}")
         
         try:
             if os.path.exists(self.video_pipe_path):
-                os.unlink(self.video_pipe_path)
-        except:
-            pass
+                # Se è una pipe, rimuovila
+                if os.path.exists(self.video_pipe_path):
+                    try:
+                        os.unlink(self.video_pipe_path)
+                    except:
+                        pass
+        except Exception as e:
+            print(f"Errore rimozione pipe: {e}")
+        
+        # Assicurati che i processi siano None
+        self.ffmpeg_video_process = None
+        self.ffmpeg_audio_process = None
+        self.stt = None
 
 
 @app.route('/')
@@ -349,8 +435,28 @@ def test():
 @app.route('/debug')
 def debug():
     """Pagina di debug."""
+    import subprocess
+    
     template_path = os.path.join(app.template_folder, 'index.html')
     simple_path = os.path.join(app.template_folder, 'index_simple.html')
+    
+    # Conta processi FFmpeg
+    try:
+        ffmpeg_count = len([p for p in subprocess.check_output(['ps', 'aux']).decode().split('\n') if 'ffmpeg' in p and 'video_session' in p])
+    except:
+        ffmpeg_count = 0
+    
+    # Lista sessioni attive
+    active_sessions = []
+    for session_id, session in sessions.items():
+        active_sessions.append({
+            'id': session_id,
+            'status': session.status,
+            'error': session.error,
+            'pipe_exists': os.path.exists(session.video_pipe_path) if hasattr(session, 'video_pipe_path') else False,
+            'srt_exists': os.path.exists(session.srt_path) if hasattr(session, 'srt_path') else False,
+            'ffmpeg_running': session.ffmpeg_video_process.poll() is None if session.ffmpeg_video_process else False
+        })
     
     info = {
         'template_folder': app.template_folder,
@@ -359,7 +465,11 @@ def debug():
         'index_size': os.path.getsize(template_path) if os.path.exists(template_path) else 0,
         'simple_size': os.path.getsize(simple_path) if os.path.exists(simple_path) else 0,
         'cwd': os.getcwd(),
-        'script_dir': os.path.dirname(os.path.abspath(__file__))
+        'script_dir': os.path.dirname(os.path.abspath(__file__)),
+        'active_sessions_count': len(sessions),
+        'active_sessions': active_sessions,
+        'ffmpeg_processes': ffmpeg_count,
+        'platform': sys.platform
     }
     
     return f"""
@@ -369,15 +479,24 @@ def debug():
         <title>Debug Info</title>
         <meta charset="UTF-8">
         <style>
-            body {{ font-family: monospace; padding: 20px; }}
-            pre {{ background: #f5f5f5; padding: 10px; border-radius: 5px; }}
+            body {{ font-family: monospace; padding: 20px; background: #f5f5f5; }}
+            pre {{ background: white; padding: 15px; border-radius: 5px; border: 1px solid #ddd; overflow-x: auto; }}
+            .error {{ color: #c62828; font-weight: bold; }}
+            .ok {{ color: #2e7d32; }}
+            a {{ color: #1976d2; text-decoration: none; }}
+            a:hover {{ text-decoration: underline; }}
         </style>
     </head>
     <body>
-        <h1>Debug Info</h1>
+        <h1>🔍 Debug Info</h1>
         <pre>{json.dumps(info, indent=2)}</pre>
-        <p><a href="/">Torna alla pagina principale</a></p>
+        <p><a href="/">← Torna alla pagina principale</a></p>
         <p><a href="/test">Pagina di test</a></p>
+        <hr>
+        <h2>Test API</h2>
+        <p><a href="/api/status/session_1" target="_blank">Status Session 1</a></p>
+        <p>Sessioni attive: <strong>{len(sessions)}</strong></p>
+        <p>Processi FFmpeg: <strong>{ffmpeg_count}</strong></p>
     </body>
     </html>
     """
@@ -445,18 +564,63 @@ def stream_video(session_id):
     
     def generate():
         """Genera lo stream video dalla pipe."""
+        max_wait = 30  # Attendi max 30 secondi per l'inizio dello stream
+        wait_count = 0
+        
         try:
-            with open(session.video_pipe_path, 'rb') as f:
-                while session.running or (session.ffmpeg_video_process and session.ffmpeg_video_process.poll() is None):
+            # Attendi che la pipe esista e FFmpeg inizi a scrivere
+            while not os.path.exists(session.video_pipe_path) and wait_count < max_wait:
+                time.sleep(0.5)
+                wait_count += 1
+            
+            if not os.path.exists(session.video_pipe_path):
+                print(f"Errore: pipe non creata dopo {max_wait} secondi")
+                return
+            
+            # Apri la pipe
+            try:
+                f = open(session.video_pipe_path, 'rb')
+                # Su sistemi Unix, imposta il file descriptor come non-bloccante se possibile
+                if HAS_FCNTL and hasattr(fcntl, 'F_SETFL'):
+                    try:
+                        flags = fcntl.fcntl(f.fileno(), fcntl.F_GETFL)
+                        fcntl.fcntl(f.fileno(), fcntl.F_SETFL, flags | os.O_NONBLOCK)
+                    except (OSError, AttributeError):
+                        # Se non funziona, continua in modalità bloccante
+                        pass
+            except Exception as e:
+                print(f"Errore apertura pipe: {e}")
+                # Fallback: riprova in modalità bloccante
+                f = open(session.video_pipe_path, 'rb')
+            
+            empty_reads = 0
+            max_empty_reads = 100  # Max 10 secondi di letture vuote
+            
+            while session.running or (session.ffmpeg_video_process and session.ffmpeg_video_process.poll() is None):
+                try:
                     chunk = f.read(1024 * 64)  # Leggi 64KB alla volta
-                    if not chunk:
+                    if chunk:
+                        empty_reads = 0
+                        yield chunk
+                    else:
+                        empty_reads += 1
+                        if empty_reads > max_empty_reads:
+                            print("Troppi read vuoti, interrompo streaming")
+                            break
+                        time.sleep(0.1)
+                except (IOError, OSError) as e:
+                    # Su macOS, le pipe possono dare errori temporanei
+                    if e.errno == 11:  # EAGAIN - nessun dato disponibile
                         time.sleep(0.1)
                         continue
-                    yield chunk
+                    else:
+                        print(f"Errore lettura pipe: {e}")
+                        break
+            f.close()
         except Exception as e:
             print(f"Errore streaming: {e}")
-            # Se la pipe è chiusa, prova a riaprirla
-            time.sleep(0.5)
+            import traceback
+            traceback.print_exc()
     
     return Response(
         stream_with_context(generate()),
@@ -513,8 +677,31 @@ def cleanup_session(session_id):
     return jsonify({'status': 'cleaned'})
 
 
+def cleanup_all_sessions():
+    """Pulisce tutte le sessioni attive."""
+    global sessions
+    for session_id, session in list(sessions.items()):
+        try:
+            session.cleanup()
+        except Exception as e:
+            print(f"Errore cleanup sessione {session_id}: {e}")
+    sessions.clear()
+
+
+def signal_handler(signum, frame):
+    """Gestisce i segnali di terminazione per pulire le risorse."""
+    print("\n\nRicevuto segnale di terminazione, pulizia risorse...")
+    cleanup_all_sessions()
+    sys.exit(0)
+
+
 if __name__ == '__main__':
     import argparse
+    import signal
+    
+    # Registra handler per segnali di terminazione
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
     
     parser = argparse.ArgumentParser(description='Server web per trascrizione video con sottotitoli')
     parser.add_argument('--host', default='0.0.0.0', help='Host (default: 0.0.0.0 per accesso remoto)')
@@ -533,8 +720,14 @@ if __name__ == '__main__':
     
     try:
         app.run(host=args.host, port=args.port, debug=args.debug, threaded=True, use_reloader=False)
+    except KeyboardInterrupt:
+        print("\n\nInterruzione da utente, pulizia risorse...")
+        cleanup_all_sessions()
     except PermissionError as e:
         print(f"\n❌ Errore permessi: {e}")
         print(f"Prova con una porta diversa: python web_app.py --port 8080")
+        cleanup_all_sessions()
         sys.exit(1)
+    finally:
+        cleanup_all_sessions()
 
