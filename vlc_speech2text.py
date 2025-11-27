@@ -295,7 +295,7 @@ def restart_ffmpeg_video_process(input_source, srt_path, output_path=None, use_h
     ffmpeg_cmd = [
         "ffmpeg",
         "-i", input_source,
-        "-vf", f"subtitles='{escaped_srt_path}':force_style='FontSize=24,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=2,Bold=1'",
+        "-vf", f"subtitles={abs_srt_path}:force_style='FontSize=24,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=2,Bold=1'",
         "-c:v", "libx264",
         "-preset", "medium",  # Cambiato da ultrafast a medium per migliore qualità
         "-crf", "23",  # Qualità video (18-28, più basso = migliore qualità)
