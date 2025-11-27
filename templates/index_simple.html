@@ -176,31 +176,73 @@
                             
                             videoPlayer.addEventListener('canplay', () => {
                                 console.log('Video: canplay - pronto per riproduzione');
-                                status.textContent = 'Video caricato, riproduzione in corso...';
+                                status.textContent = 'Video caricato, bufferizzazione...';
+                                status.style.background = '#fff3e0';
+                                status.style.color = '#e65100';
+                            });
+                            
+                            videoPlayer.addEventListener('canplaythrough', () => {
+                                console.log('Video: canplaythrough - buffer completo');
+                                status.textContent = 'Buffer completo, riproduzione in corso...';
                                 status.style.background = '#e8f5e9';
                                 status.style.color = '#2e7d32';
                             });
                             
                             videoPlayer.addEventListener('waiting', () => {
-                                console.log('Video: waiting - in attesa di dati');
+                                console.log('Video: waiting - buffer in attesa');
+                                status.textContent = 'Bufferizzazione in corso...';
+                                status.style.background = '#fff3e0';
+                                status.style.color = '#e65100';
                             });
                             
                             videoPlayer.addEventListener('stalled', () => {
                                 console.warn('Video: stalled - stream bloccato');
+                                status.textContent = 'Stream in pausa, bufferizzazione...';
                             });
                             
-                            // Prova a riprodurre
-                            setTimeout(() => {
-                                videoPlayer.play().then(() => {
-                                    console.log('Video: play() riuscito');
-                                }).catch(err => {
-                                    console.error('Errore play():', err);
-                                    status.textContent = 'Impossibile avviare la riproduzione automatica. Clicca play manualmente.';
-                                    status.style.background = '#fff3e0';
-                                    status.style.color = '#e65100';
-                                });
-                            }, 1000);
-                        }, 3000); // Attendi 3 secondi per permettere a FFmpeg di iniziare a scrivere
+                            videoPlayer.addEventListener('progress', () => {
+                                if (videoPlayer.buffered.length > 0) {
+                                    const bufferedEnd = videoPlayer.buffered.end(videoPlayer.buffered.length - 1);
+                                    const duration = videoPlayer.duration;
+                                    if (duration > 0) {
+                                        const bufferedPercent = (bufferedEnd / duration * 100).toFixed(1);
+                                        console.log(`Buffer: ${bufferedPercent}%`);
+                                    }
+                                }
+                            });
+                            
+                            // Attendi buffer sufficiente prima di riprodurre
+                            const tryPlay = () => {
+                                if (videoPlayer.readyState >= 3) {
+                                    if (videoPlayer.buffered.length > 0) {
+                                        const bufferedEnd = videoPlayer.buffered.end(videoPlayer.buffered.length - 1);
+                                        if (bufferedEnd > 10) { // Almeno 10 secondi di buffer
+                                            videoPlayer.play().then(() => {
+                                                console.log('Video: play() riuscito');
+                                                status.textContent = 'Riproduzione avviata!';
+                                                status.style.background = '#e8f5e9';
+                                                status.style.color = '#2e7d32';
+                                            }).catch(err => {
+                                                console.error('Errore play():', err);
+                                                status.textContent = 'Clicca play manualmente se necessario.';
+                                                status.style.background = '#fff3e0';
+                                                status.style.color = '#e65100';
+                                            });
+                                        } else {
+                                            // Attendi più buffer
+                                            setTimeout(tryPlay, 1000);
+                                        }
+                                    } else {
+                                        setTimeout(tryPlay, 500);
+                                    }
+                                } else {
+                                    setTimeout(tryPlay, 500);
+                                }
+                            };
+                            
+                            // Inizia a provare dopo 8 secondi per permettere bufferizzazione
+                            setTimeout(tryPlay, 8000);
+                        }, 5000); // Attendi 5 secondi per permettere a FFmpeg di generare abbastanza dati
                         
                         status.textContent = 'Avvio streaming...';
                         status.style.background = '#fff3e0';
