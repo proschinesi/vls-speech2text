@@ -227,14 +227,18 @@ class VideoTranscriptionSession:
                                 self.all_subtitles.append(subtitle)
                                 
                                 # Aggiorna file SRT
-                                with open(self.srt_path, 'w', encoding='utf-8') as f:
-                                    for sub in self.all_subtitles:
-                                        f.write(f"{sub['index']}\n")
-                                        f.write(f"{format_srt_time(sub['start'])} --> {format_srt_time(sub['end'])}\n")
-                                        f.write(f"{sub['text']}\n\n")
+                                try:
+                                    with open(self.srt_path, 'w', encoding='utf-8') as f:
+                                        for sub in self.all_subtitles:
+                                            f.write(f"{sub['index']}\n")
+                                            f.write(f"{format_srt_time(sub['start'])} --> {format_srt_time(sub['end'])}\n")
+                                            f.write(f"{sub['text']}\n\n")
+                                    print(f"[Session {self.session_id}] SRT aggiornato con {len(self.all_subtitles)} sottotitoli")
+                                except Exception as e:
+                                    print(f"Errore scrittura SRT: {e}")
                                 
-                                # Riavvia FFmpeg ogni 3 sottotitoli
-                                if self.subtitle_index % 3 == 0:
+                                # Riavvia FFmpeg ogni 5 sottotitoli (meno frequente per stabilità)
+                                if self.subtitle_index % 5 == 0:
                                     try:
                                         self.ffmpeg_video_process.terminate()
                                         self.ffmpeg_video_process.wait(timeout=2)
@@ -616,14 +620,23 @@ def stream_video(session_id):
                 return
             
             empty_reads = 0
-            max_empty_reads = 200  # Max 20 secondi di letture vuote per file MP4
+            max_empty_reads = 300  # Max 30 secondi di letture vuote per file MP4
             last_size = 0
             no_growth_count = 0
+            min_file_size = 1024 * 100  # Attendi almeno 100KB prima di iniziare
+            
+            # Attendi che il file abbia una dimensione minima
+            while os.path.getsize(session.video_pipe_path) < min_file_size and wait_count < max_wait:
+                time.sleep(0.5)
+                wait_count += 1
+                if wait_count >= max_wait:
+                    print(f"File troppo piccolo dopo attesa, procedo comunque")
+                    break
             
             while session.running or (session.ffmpeg_video_process and session.ffmpeg_video_process.poll() is None):
                 try:
                     # Per file MP4, leggi dalla posizione corrente
-                    chunk = f.read(1024 * 64)  # Leggi 64KB alla volta
+                    chunk = f.read(1024 * 128)  # Leggi 128KB alla volta (buffer più grande)
                     if chunk:
                         empty_reads = 0
                         no_growth_count = 0
@@ -636,14 +649,14 @@ def stream_video(session_id):
                             no_growth_count = 0
                             # File sta crescendo, riposiziona e riprova
                             f.seek(f.tell())  # Mantieni posizione
-                            time.sleep(0.2)
+                            time.sleep(0.3)  # Attesa leggermente più lunga
                         else:
                             no_growth_count += 1
                             empty_reads += 1
-                            if empty_reads > max_empty_reads or no_growth_count > 50:
+                            if empty_reads > max_empty_reads or no_growth_count > 100:
                                 print("File non sta crescendo o troppi read vuoti")
                                 break
-                            time.sleep(0.2)
+                            time.sleep(0.3)  # Attesa più lunga per permettere a FFmpeg di scrivere
                 except (IOError, OSError) as e:
                     if e.errno == 11:  # EAGAIN - nessun dato disponibile (solo per pipe)
                         time.sleep(0.1)

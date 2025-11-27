@@ -272,16 +272,26 @@ def restart_ffmpeg_video_process(input_source, srt_path, output_path=None, use_h
     if output_path and not output_path.endswith('.ts'):
         use_mp4 = True
     
+    # Verifica che il file SRT esista e non sia vuoto
+    if not os.path.exists(srt_path) or os.path.getsize(srt_path) == 0:
+        print(f"ATTENZIONE: File SRT non trovato o vuoto: {srt_path}")
+        # Crea un file SRT minimo
+        with open(srt_path, 'w', encoding='utf-8') as f:
+            f.write("1\n00:00:00,000 --> 00:00:01,000\nCaricamento sottotitoli...\n\n")
+    
     ffmpeg_cmd = [
         "ffmpeg",
         "-i", input_source,
         "-vf", f"subtitles='{escaped_srt_path}':force_style='FontSize=24,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=2,Bold=1'",
         "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-tune", "zerolatency",
+        "-preset", "medium",  # Cambiato da ultrafast a medium per migliore qualità
+        "-crf", "23",  # Qualità video (18-28, più basso = migliore qualità)
         "-profile:v", "baseline",  # Profilo baseline per massima compatibilità
-        "-level", "3.0",
+        "-level", "3.1",  # Aumentato per supportare risoluzioni più alte
         "-pix_fmt", "yuv420p",  # Formato pixel standard
+        "-g", "30",  # GOP size (keyframe ogni 30 frame)
+        "-keyint_min", "30",
+        "-sc_threshold", "0",
         "-c:a", "aac",
         "-b:a", "128k",  # Bitrate audio fisso
         "-ar", "44100",  # Sample rate standard
