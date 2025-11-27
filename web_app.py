@@ -256,17 +256,28 @@ class VideoTranscriptionSession:
                                     time.sleep(1)
                                     
                                     # Riavvia FFmpeg con il file SRT aggiornato
+                                    # IMPORTANTE: Il file SRT deve essere completamente scritto prima di riavviare FFmpeg
                                     try:
+                                        # Forza flush del file SRT
+                                        import os
+                                        os.sync()  # Sincronizza filesystem
+                                        
+                                        # Verifica che il file SRT sia stato scritto
+                                        if os.path.exists(self.srt_path) and os.path.getsize(self.srt_path) > 0:
+                                            print(f"[Session {self.session_id}] File SRT verificato: {os.path.getsize(self.srt_path)} bytes")
+                                        
                                         self.ffmpeg_video_process = restart_ffmpeg_video_process(
                                             self.video_url,
                                             self.srt_path,
                                             self.video_pipe_path,
                                             use_http=False
                                         )
-                                        print(f"[Session {self.session_id}] FFmpeg riavviato con SRT aggiornato")
-                                        time.sleep(2)  # Attendi che FFmpeg inizi a scrivere
+                                        print(f"[Session {self.session_id}] FFmpeg riavviato con SRT aggiornato ({len(self.all_subtitles)} sottotitoli)")
+                                        time.sleep(3)  # Attendi più tempo che FFmpeg inizi a scrivere
                                     except Exception as e:
                                         print(f"Errore riavvio FFmpeg: {e}")
+                                        import traceback
+                                        traceback.print_exc()
                                 
                                 self.subtitle_index += 1
                             
