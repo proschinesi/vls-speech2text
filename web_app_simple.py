@@ -82,12 +82,12 @@ if not FFMPEG_PATH and os.path.exists("/usr/local/bin/ffmpeg"):
     except:
         pass
 
-# Fallback: FFmpeg nel PATH (Homebrew, senza Whisper)
+# Fallback: FFmpeg nel PATH (Homebrew, senza Whisper, o Railway/system)
 if not FFMPEG_PATH:
     FFMPEG_PATH = "ffmpeg"
     print("⚠ FFmpeg con Whisper non trovato")
-    print("  Per abilitarlo, esegui: ./complete_ffmpeg_install.sh")
-    print("  (richiede sudo per installare FFmpeg in /usr/local)")
+    print("  Su Railway/cloud, FFmpeg potrebbe non avere il filtro Whisper nativo")
+    print("  L'app userà Python Whisper come fallback se disponibile")
 
 # Configura Flask
 template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')

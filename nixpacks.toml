@@ -1,0 +1,13 @@
+# Configurazione Nixpacks per Railway
+[phases.setup]
+nixPkgs = ["python3", "ffmpeg", "git", "gcc", "make", "cmake", "pkg-config"]
+
+[phases.install]
+cmds = [
+  "pip install --upgrade pip",
+  "pip install -r requirements.txt"
+]
+
+[start]
+cmd = "python web_app_simple.py --host 0.0.0.0 --port $PORT"
+
