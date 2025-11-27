@@ -1079,7 +1079,8 @@ if __name__ == '__main__':
     
     parser = argparse.ArgumentParser(description='Server web per trascrizione video con sottotitoli')
     parser.add_argument('--host', default='0.0.0.0', help='Host (default: 0.0.0.0 per accesso remoto)')
-    parser.add_argument('--port', type=int, default=5000, help='Porta (default: 5000)')
+    # Usa PORT da environment (Railway, Heroku, etc.) o default 5000
+    parser.add_argument('--port', type=int, default=int(os.environ.get('PORT', 5000)), help='Porta (default: PORT env var o 5000)')
     parser.add_argument('--debug', action='store_true', help='Modalità debug')
     
     args = parser.parse_args()
