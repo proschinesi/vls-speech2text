@@ -16,11 +16,13 @@ from flask_cors import CORS
 
 # Cerca FFmpeg compilato con Whisper
 FFMPEG_PATH = None
-# Supporta sia macOS che Linux
+# Supporta macOS, Linux on-premise e Railway/Docker
 if os.path.exists("/Users/ube/ffmpeg_build/ffmpeg"):
     FFMPEG_BUILD_DIR = "/Users/ube/ffmpeg_build/ffmpeg"  # macOS
+elif os.path.exists("/opt/ffmpeg_build/ffmpeg"):
+    FFMPEG_BUILD_DIR = "/opt/ffmpeg_build/ffmpeg"  # Linux on-premise
 else:
-    FFMPEG_BUILD_DIR = "/opt/ffmpeg_build/ffmpeg"  # Linux
+    FFMPEG_BUILD_DIR = "/tmp/ffmpeg_build/ffmpeg"  # Railway/Docker
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 FFMPEG_WRAPPER = os.path.join(SCRIPT_DIR, "ffmpeg_whisper_wrapper.sh")
 
@@ -59,7 +61,7 @@ if os.path.exists(FFMPEG_WRAPPER) and os.path.exists(os.path.join(FFMPEG_BUILD_D
         import traceback
         traceback.print_exc()
 
-# Se non trovato, prova /usr/local/bin/ffmpeg (dopo installazione)
+# Se non trovato, prova /usr/local/bin/ffmpeg (dopo installazione, incluso Railway/Docker)
 if not FFMPEG_PATH and os.path.exists("/usr/local/bin/ffmpeg"):
     try:
         result = subprocess.run(
