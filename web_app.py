@@ -573,24 +573,34 @@ def stream_video(session_id):
         return "Stream non disponibile", 404
     
     def generate():
-        """Genera lo stream video dalla pipe."""
+        """Genera lo stream video dal file."""
         max_wait = 30  # Attendi max 30 secondi per l'inizio dello stream
         wait_count = 0
         
         try:
-            # Attendi che la pipe esista e FFmpeg inizi a scrivere
-            while not os.path.exists(session.video_pipe_path) and wait_count < max_wait:
+            # Attendi che il file esista e abbia contenuto
+            while (not os.path.exists(session.video_pipe_path) or 
+                   os.path.getsize(session.video_pipe_path) == 0) and wait_count < max_wait:
                 time.sleep(0.5)
                 wait_count += 1
             
             if not os.path.exists(session.video_pipe_path):
-                print(f"Errore: pipe non creata dopo {max_wait} secondi")
+                print(f"Errore: file non creato dopo {max_wait} secondi")
                 return
             
-            # Apri la pipe/file
-            # Se è un file MP4, leggi in modo normale
-            # Se è una pipe, usa non-blocking
-            is_pipe = os.path.isfifo(session.video_pipe_path) if hasattr(os.path, 'isfifo') else False
+            # Per file MP4, assicurati che abbia almeno alcuni KB prima di iniziare
+            file_size = os.path.getsize(session.video_pipe_path)
+            if file_size < 1024:  # Meno di 1KB
+                print(f"File troppo piccolo ({file_size} bytes), attendo...")
+                time.sleep(2)
+            
+            # Apri il file
+            is_pipe = False
+            if hasattr(os.path, 'isfifo'):
+                try:
+                    is_pipe = os.path.isfifo(session.video_pipe_path)
+                except:
+                    pass
             
             try:
                 f = open(session.video_pipe_path, 'rb')
@@ -602,32 +612,49 @@ def stream_video(session_id):
                     except (OSError, AttributeError):
                         pass
             except Exception as e:
-                print(f"Errore apertura file/pipe: {e}")
-                f = open(session.video_pipe_path, 'rb')
+                print(f"Errore apertura file: {e}")
+                return
             
             empty_reads = 0
-            max_empty_reads = 100  # Max 10 secondi di letture vuote
+            max_empty_reads = 200  # Max 20 secondi di letture vuote per file MP4
+            last_size = 0
+            no_growth_count = 0
             
             while session.running or (session.ffmpeg_video_process and session.ffmpeg_video_process.poll() is None):
                 try:
+                    # Per file MP4, leggi dalla posizione corrente
                     chunk = f.read(1024 * 64)  # Leggi 64KB alla volta
                     if chunk:
                         empty_reads = 0
+                        no_growth_count = 0
                         yield chunk
                     else:
-                        empty_reads += 1
-                        if empty_reads > max_empty_reads:
-                            print("Troppi read vuoti, interrompo streaming")
-                            break
-                        time.sleep(0.1)
+                        # Verifica se il file sta crescendo
+                        current_size = os.path.getsize(session.video_pipe_path)
+                        if current_size > last_size:
+                            last_size = current_size
+                            no_growth_count = 0
+                            # File sta crescendo, riposiziona e riprova
+                            f.seek(f.tell())  # Mantieni posizione
+                            time.sleep(0.2)
+                        else:
+                            no_growth_count += 1
+                            empty_reads += 1
+                            if empty_reads > max_empty_reads or no_growth_count > 50:
+                                print("File non sta crescendo o troppi read vuoti")
+                                break
+                            time.sleep(0.2)
                 except (IOError, OSError) as e:
-                    # Su macOS, le pipe possono dare errori temporanei
-                    if e.errno == 11:  # EAGAIN - nessun dato disponibile
+                    if e.errno == 11:  # EAGAIN - nessun dato disponibile (solo per pipe)
                         time.sleep(0.1)
                         continue
                     else:
-                        print(f"Errore lettura pipe: {e}")
+                        print(f"Errore lettura file: {e}")
                         break
+                except Exception as e:
+                    print(f"Errore generico: {e}")
+                    break
+            
             f.close()
         except Exception as e:
             print(f"Errore streaming: {e}")

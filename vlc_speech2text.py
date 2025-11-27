@@ -279,12 +279,21 @@ def restart_ffmpeg_video_process(input_source, srt_path, output_path=None, use_h
         "-c:v", "libx264",
         "-preset", "ultrafast",
         "-tune", "zerolatency",
-        "-c:a", "aac",  # AAC è più compatibile di copy per MP4
-        "-movflags", "frag_keyframe+empty_moov",  # Per streaming MP4
+        "-profile:v", "baseline",  # Profilo baseline per massima compatibilità
+        "-level", "3.0",
+        "-pix_fmt", "yuv420p",  # Formato pixel standard
+        "-c:a", "aac",
+        "-b:a", "128k",  # Bitrate audio fisso
+        "-ar", "44100",  # Sample rate standard
     ]
     
     if use_mp4:
-        ffmpeg_cmd.extend(["-f", "mp4"])
+        # MP4 fragmented per streaming - metadati all'inizio
+        ffmpeg_cmd.extend([
+            "-f", "mp4",
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof",  # Streaming-friendly
+            "-frag_duration", "1000000"  # 1 secondo per fragment
+        ])
     else:
         ffmpeg_cmd.extend(["-f", "mpegts"])
     
