@@ -2,6 +2,21 @@
 
 Script per lanciare VLC da linea di comando con output speech-to-text incorporato utilizzando Whisper.
 
+## 🚀 Deploy su DigitalOcean
+
+Per deployare l'applicazione su una droplet DigitalOcean, consulta la [guida completa di deploy](DEPLOY.md).
+
+**Deploy rapido:**
+```bash
+# Sulla droplet
+cd /opt
+sudo git clone https://github.com/proschinesi/vls-speech2text.git
+cd vls-speech2text
+sudo ./deploy.sh
+```
+
+---
+
 ## Script disponibili
 
 Questo progetto include tre approcci per la trascrizione:
